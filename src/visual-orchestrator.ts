@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import chalk from 'chalk';
 import { Bridge } from './bridge';
-import { launchDashboard, writePhaseScripts, attachToCurrentTerminal } from './launcher';
+import { launchDashboard, writePhaseScripts, attachToCurrentTerminal, cleanupSession } from './launcher';
 import type { CLIConfig, ActiveCLIs } from './types';
 
 // ── Prompt builders ───────────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ export async function runVisualOrchestration(
     return f;
   });
 
-  const opts = { clis, promptFiles: p1Files, bridgePath: bridge.path, projectDir, sessionDir, safeMode };
+  const opts = { clis, promptFiles: p1Files, bridgePath: bridge.path, projectDir, sessionDir, sessionId: timestamp, safeMode };
 
   // Pre-write P2 run scripts (phase-manager.sh will execute them after guidance)
   writePhaseScripts(opts, 2, p2Files);
@@ -109,6 +109,9 @@ export async function runVisualOrchestration(
 
   // Attach tmux to current terminal — blocks until phase-manager detaches
   attachToCurrentTerminal();
+
+  // Clean up MCP registrations
+  cleanupSession({ sessionId: timestamp, projectDir, clis });
 
   // ── Resumed after detach ──────────────────────────────────────────────────────
   const sessionFile = path.join(sessionDir, 'session.md');

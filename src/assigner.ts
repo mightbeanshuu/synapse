@@ -1,5 +1,26 @@
 import type { Analysis, CLIConfig, CLIId, ActiveCLIs } from './types';
 
+// ── MCP collaboration block appended to all preambles ────────────────────────
+const MCP_BLOCK = `
+══════════════════════════════════════════════════════
+MCP COLLABORATION TOOLS — USE THESE TO COORDINATE
+══════════════════════════════════════════════════════
+You have an MCP server connected. Use these tools to collaborate in real-time with the other agents working in parallel:
+
+  post_message(content, to?)    — broadcast a message to all agents or a specific one
+  read_messages(from?, limit?)  — read messages from other agents
+  set_context(key, value)       — write shared state (API contracts, decisions, file paths)
+  get_context(key?)             — read shared state written by any agent
+  signal_done(phase, summary?)  — signal you finished a phase (triggers next phase)
+
+COLLABORATION PROTOCOL:
+1. START: call read_messages() to see if other agents have posted context
+2. INTERFACES: when you define a public API, type, or file path — set_context("api/<name>", {...})
+3. UPDATES: post_message() when you hit a blocker or make a cross-cutting decision
+4. POLL: call read_messages() every 10-15 minutes to stay in sync with partners
+5. FINISH: call signal_done(phase=1, summary="...") when your phase 1 work is complete
+══════════════════════════════════════════════════════`;
+
 // ── Role preambles ────────────────────────────────────────────────────────────
 
 const ARCHITECT_PREAMBLE = `You are the LOGIC & ARCHITECTURE lead.
@@ -108,11 +129,12 @@ const CLI_SYMBOLS: Record<CLIId, string> = {
 };
 
 function makeConfig(id: CLIId, role: CLIConfig['role'], preamble?: string): CLIConfig {
-  const p = preamble ?? (
+  const base = preamble ?? (
     role === 'architect' ? ARCHITECT_PREAMBLE :
     role === 'reviewer'  ? REVIEWER_PREAMBLE  :
     EXECUTOR_PREAMBLE
   );
+  const p = base + MCP_BLOCK;
   const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
   return {
     id,

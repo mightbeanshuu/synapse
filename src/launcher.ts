@@ -2,6 +2,7 @@ import { execSync, spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import type { CLIConfig } from './types';
+import { registerMCP, cleanupMCP } from './mcp/register';
 
 const SESSION = 'synapse';
 const PHASE_MANAGER_SH = path.join(__dirname, 'phase-manager.sh');
@@ -135,7 +136,9 @@ export interface LaunchOpts {
   bridgePath: string;
   projectDir: string;
   sessionDir: string;
+  sessionId: string;
   safeMode?: boolean;
+  useMCP?: boolean;
 }
 
 // ── Write all run scripts for a phase ────────────────────────────────────────
@@ -152,7 +155,19 @@ export function writePhaseScripts(opts: LaunchOpts, phase: number, promptFiles: 
 
 // ── Launch the tmux dashboard + open activity feed in separate terminal ───────
 export function launchDashboard(opts: LaunchOpts): void {
-  const { clis, promptFiles, bridgePath, projectDir, sessionDir } = opts;
+  const { clis, promptFiles, bridgePath, projectDir, sessionDir, sessionId } = opts;
+  const cliIds = clis.map(c => c.id);
+
+  // Register MCP server with all CLIs before launching
+  const mcpStateDir = path.join(sessionDir, 'mcp');
+  fs.mkdirSync(mcpStateDir, { recursive: true });
+  if (opts.useMCP !== false) {
+    try {
+      const mcpName = registerMCP(sessionId, mcpStateDir, projectDir, cliIds);
+      fs.writeFileSync(path.join(sessionDir, '.mcp_name'), mcpName);
+      fs.writeFileSync(path.join(sessionDir, '.mcp_state_dir'), mcpStateDir);
+    } catch {}
+  }
 
   killSession();
   tmux(`new-session -d -s ${SESSION} -x 260 -y 60`);
@@ -207,4 +222,11 @@ export function launchDashboard(opts: LaunchOpts): void {
 // ── Attach tmux to current terminal (blocks until phase-manager detaches) ────
 export function attachToCurrentTerminal(): void {
   spawnSync('tmux', ['attach-session', '-t', SESSION], { stdio: 'inherit' });
+}
+
+// ── MCP cleanup (called after session completes) ──────────────────────────────
+export function cleanupSession(opts: Pick<LaunchOpts, 'sessionId' | 'projectDir' | 'clis'>): void {
+  try {
+    cleanupMCP(opts.sessionId, opts.projectDir, opts.clis.map(c => c.id));
+  } catch {}
 }
