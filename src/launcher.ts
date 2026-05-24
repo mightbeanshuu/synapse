@@ -173,6 +173,21 @@ export function launchDashboard(opts: LaunchOpts): void {
     tmux(`send-keys -t "${SESSION}:${pane}" "bash '${scriptPath}'" Enter`);
   });
 
+  // Write metadata files so phase-manager can open streams on-demand
+  const interactiveStreamSh = path.join(__dirname, 'interactive-stream.sh');
+  const pipePath = path.join(sessionDir, 'commands.pipe');
+  const safeModeFlag = opts.safeMode ? '1' : '0';
+
+  fs.writeFileSync(path.join(sessionDir, '.safe_mode'), safeModeFlag);
+  fs.writeFileSync(
+    path.join(sessionDir, '.cli_meta'),
+    clis.map(c => `${c.id}:${c.symbol}`).join('\n')
+  );
+  fs.writeFileSync(
+    path.join(sessionDir, '.stream_sh'),
+    interactiveStreamSh
+  );
+
   // Write a feed launcher script (command center + summary)
   const cliIds     = clis.map(c => c.id).join(' ');
   const feedScript = path.join(sessionDir, '_feed.sh');
@@ -185,20 +200,8 @@ export function launchDashboard(opts: LaunchOpts): void {
     `  '${SESSION}' ${clis.length} ${cliIds}`,
   ].join('\n'), { mode: 0o755 });
 
-  // Open command center in dedicated Terminal.app window
+  // Only open the command center — live streams open on-demand via /c /g /x
   openTerminalWindow(`bash '${feedScript}'`);
-
-  // Open one live terminal window per selected CLI with rolling logs and interactive chat.
-  const interactiveStreamSh = path.join(__dirname, 'interactive-stream.sh');
-  const pipePath = path.join(sessionDir, 'commands.pipe');
-  
-  const safeModeFlag = opts.safeMode ? '1' : '0';
-  clis.forEach((cli) => {
-    const p1 = path.join(sessionDir, `${cli.id}_p1.log`);
-    const p2 = path.join(sessionDir, `${cli.id}_p2.log`);
-    const cmd = `bash '${interactiveStreamSh}' '${cli.id}' '${cli.symbol}' '${p1}' '${p2}' '${pipePath}' '${safeModeFlag}'`;
-    openTerminalWindow(cmd);
-  });
 }
 
 // ── Attach tmux to current terminal (blocks until phase-manager detaches) ────

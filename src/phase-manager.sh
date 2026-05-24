@@ -19,6 +19,39 @@ ALL_IDS="$CLI_ID_0"
 [ -n "$CLI_ID_1" ] && ALL_IDS="$ALL_IDS $CLI_ID_1"
 [ -n "$CLI_ID_2" ] && ALL_IDS="$ALL_IDS $CLI_ID_2"
 
+# ── Read session metadata ──────────────────────────────────────────────────────
+SAFE_MODE=0
+[ -f "${SESSION_DIR}/.safe_mode" ] && SAFE_MODE=$(cat "${SESSION_DIR}/.safe_mode" 2>/dev/null)
+STREAM_SH=""
+[ -f "${SESSION_DIR}/.stream_sh" ] && STREAM_SH=$(cat "${SESSION_DIR}/.stream_sh" 2>/dev/null)
+
+# id→symbol lookup from .cli_meta  (format: id:symbol per line)
+symbol_for() {
+  local id="$1"
+  local sym=""
+  if [ -f "${SESSION_DIR}/.cli_meta" ]; then
+    sym=$(grep "^${id}:" "${SESSION_DIR}/.cli_meta" 2>/dev/null | head -1 | cut -d: -f2-)
+  fi
+  [ -z "$sym" ] && case "$id" in claude) sym="☁️";; gemini) sym="💎";; codex) sym="🌀";; *) sym="•";; esac
+  echo "$sym"
+}
+
+# ── Open an interactive stream window for a CLI ───────────────────────────────
+open_stream() {
+  local id="$1"
+  if [ -z "$STREAM_SH" ] || [ ! -f "$STREAM_SH" ]; then
+    event_final "$RED" "✗" "stream" "interactive-stream.sh not found — check session metadata"
+    return 1
+  fi
+  local sym; sym=$(symbol_for "$id")
+  local p1="${SESSION_DIR}/${id}_p1.log"
+  local p2="${SESSION_DIR}/${id}_p2.log"
+  local pipe="${SESSION_DIR}/commands.pipe"
+  osascript -e "tell application \"Terminal\" to do script \"bash '${STREAM_SH}' '${id}' '${sym}' '${p1}' '${p2}' '${pipe}' '${SAFE_MODE}'\"" 2>/dev/null \
+    || event_final "$YELLOW" "⚠" "stream" "osascript failed — run manually: bash '${STREAM_SH}' ${id}"
+  event_final "$TEAL" "▶" "stream" "Opened ${id} live stream"
+}
+
 R=$'\033[0m'; CYAN=$'\033[36m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
 RED=$'\033[31m'; DIM=$'\033[2m'; BOLD=$'\033[1m'; BLUE=$'\033[34m'
 TEAL=$'\033[38;5;51m'; MAGENTA=$'\033[35m'; ORANGE=$'\033[38;5;208m'
@@ -346,7 +379,29 @@ handle_command() {
   local line="$1"
   case "$line" in
     /help)
-      event_final "$MAGENTA" "?" "commands" "/summary  /status  /ask <cli|all> <msg>  /priority <msg>  /continue"
+      stop_spinner
+      printf "\n"
+      divider
+      printf "${MAGENTA}${BOLD}  Commands${R}\n"
+      divider
+      printf "  ${TEAL}▶ Live streams (open on demand)${R}\n"
+      printf "  ${BOLD}  /c${R}               open Claude live stream\n"
+      printf "  ${BOLD}  /g${R}               open Gemini live stream\n"
+      printf "  ${BOLD}  /x${R}               open Codex live stream\n"
+      printf "  ${BOLD}  /open <id>${R}        open any CLI stream  (claude|gemini|codex)\n"
+      printf "  ${BOLD}  /open all${R}         open all CLI streams\n"
+      printf "\n"
+      printf "  ${TEAL}▶ Messaging${R}\n"
+      printf "  ${BOLD}  /ask <id> <msg>${R}   send message to one CLI\n"
+      printf "  ${BOLD}  /ask all <msg>${R}    broadcast to all CLIs\n"
+      printf "  ${BOLD}  /priority <msg>${R}   interrupt all CLIs with urgent message\n"
+      printf "\n"
+      printf "  ${TEAL}▶ Info${R}\n"
+      printf "  ${BOLD}  /summary${R}          show last 4 lines from each CLI\n"
+      printf "  ${BOLD}  /status${R}           show phase completion status\n"
+      printf "  ${BOLD}  /continue${R}         resume after stall prompt\n"
+      divider
+      start_spinner
       ;;
     /summary)
       print_summary
@@ -357,6 +412,19 @@ handle_command() {
     /continue)
       event_final "$CYAN" "▶" "command" "Continuing current phase"
       ;;
+    # ── Stream open shortcuts ──────────────────────────────────────────────────
+    /c|/claude)
+      open_stream "claude" ;;
+    /g|/gemini)
+      open_stream "gemini" ;;
+    /x|/codex)
+      open_stream "codex" ;;
+    /open\ all)
+      for id in $ALL_IDS; do open_stream "$id"; done ;;
+    /open\ *)
+      local id="${line#/open }"
+      open_stream "$id" ;;
+    # ── Messaging ─────────────────────────────────────────────────────────────
     /priority\ *)
       local msg="${line#/priority }"
       for id in $ALL_IDS; do send_to_cli "$id" "$msg"; done
@@ -379,7 +447,7 @@ handle_command() {
       fi
       ;;
     *)
-      event_final "$YELLOW" "⚠" "command" "Unknown command. Use /help"
+      event_final "$YELLOW" "⚠" "command" "Unknown. /help for commands — /c /g /x to open streams"
       ;;
   esac
 }
@@ -514,6 +582,7 @@ printf "  ${DIM}Agents  : ${ALL_IDS}${R}\n"
 printf "\n"
 wbar
 printf "\n"
+printf "  ${TEAL}${BOLD}/c${R}${DIM} claude  ${R}${TEAL}${BOLD}/g${R}${DIM} gemini  ${R}${TEAL}${BOLD}/x${R}${DIM} codex  ${R}${TEAL}${BOLD}/open all${R}${DIM} — open live streams${R}\n"
 printf "  ${DIM}/help  /status  /summary  /ask <agent|all> <msg>  /priority <msg>${R}\n"
 printf "  ${DIM}Guardrails: P1=${P1_TIMEOUT}s  P2=${P2_TIMEOUT}s  stall-kill=${STALL_KILL}×8s${R}\n"
 printf "\n"
