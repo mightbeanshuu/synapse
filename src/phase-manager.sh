@@ -54,7 +54,7 @@ idx_for() {
 run_cmd_for() {
   case "$1" in
     gemini) echo 'gemini --yolo -p "$PROMPT" 2>&1 | sed "s/^/💎 /" | tee -a "$LOGFILE"' ;;
-    codex)  echo 'codex exec --ask-for-approval never "$PROMPT" 2>&1 | sed "s/^/🌀 /" | tee -a "$LOGFILE"' ;;
+    codex)  echo 'codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT" 2>&1 | sed "s/^/🌀 /" | tee -a "$LOGFILE"' ;;
     *)      echo 'claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | sed "s/^/☁️ /" | tee -a "$LOGFILE"' ;;
   esac
 }

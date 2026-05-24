@@ -20,7 +20,9 @@ function tmux(cmd: string): void {
 }
 
 function openTerminalWindow(cmd: string): void {
-  const escaped = cmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const escaped = cmd.replace(/\\/g, '\\\\')
+                     .replace(/"/g, '\\"')
+                     .replace(/'/g, "'\\''");
   execSync(`osascript -e 'tell application "Terminal" to do script "${escaped}"'`);
 }
 
@@ -81,7 +83,7 @@ function writeRunScript(
   if (cli.id === 'gemini') {
     runCmd = `gemini --yolo -p "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else if (cli.id === 'codex') {
-    runCmd = `codex exec --ask-for-approval never "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
+    runCmd = `codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else {
     runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   }
