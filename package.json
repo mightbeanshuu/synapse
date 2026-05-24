@@ -1,0 +1,14 @@
+{
+  "name": "cli-duo",
+  "version": "1.0.0",
+  "description": "Multi-CLI orchestrator: Claude + Gemini build together with assigned roles",
+  "scripts": {
+    "start": "tsx src/orchestrator.ts",
+    "dev": "tsx src/orchestrator.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
