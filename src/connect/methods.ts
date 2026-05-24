@@ -2,6 +2,16 @@ import type { ConnectionMethod } from '../types';
 
 export const CONNECTION_METHODS: ConnectionMethod[] = [
   {
+    id: 'mcp',
+    name: 'MCP  (Model Context Protocol)',
+    icon: '⬡',
+    description: 'Structured stdio MCP server per CLI · shared message bus · real-time collaboration',
+    implemented: true,
+    speedBar: '████████████████',
+    speedLabel: 'BLAZING',
+    badge: '⬡ MCP',
+  },
+  {
     id: 'named-pipe',
     name: 'Named Pipe  (FIFO)',
     icon: '⚡',

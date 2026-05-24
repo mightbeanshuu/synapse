@@ -6,7 +6,6 @@ import chalk from 'chalk';
 import inquirer from 'inquirer';
 import ora from 'ora';
 import { showBanner } from './ui/banner';
-import { CONNECTION_METHODS } from './connect/methods';
 import { generateAnalysis, renderAnalysisTable, FALLBACK as FALLBACK_ANALYSIS } from './analyzer';
 import { assignRolesFromAnalysis, assignRolesManually, assignRolesForTracks, getRoleReason } from './assigner';
 import { decomposeToTracks } from './task-splitter';
@@ -15,7 +14,7 @@ import { tmuxAvailable } from './launcher';
 import { pickComplexity, runComplexityQA, buildConstraintBlock } from './complexity';
 import type { CLIId } from './types';
 
-// ── Session cleanup (remove output dirs older than 7 days) ────────────────────
+// ── Session cleanup ───────────────────────────────────────────────────────────
 function cleanOldSessions(): void {
   const outputDir = path.join(__dirname, '..', 'output');
   if (!fs.existsSync(outputDir)) return;
@@ -24,31 +23,36 @@ function cleanOldSessions(): void {
     for (const entry of fs.readdirSync(outputDir)) {
       const full = path.join(outputDir, entry);
       const stat = fs.statSync(full);
-      if (stat.isDirectory() && stat.mtimeMs < cutoff) {
-        fs.rmSync(full, { recursive: true, force: true });
-      }
+      if (stat.isDirectory() && stat.mtimeMs < cutoff) fs.rmSync(full, { recursive: true, force: true });
     }
-  } catch { /* best effort */ }
+  } catch {}
 }
 
-// ── CLI availability ──────────────────────────────────────────────────────────
 function cliAvailable(bin: string): boolean {
   try { execSync(`which ${bin}`, { stdio: 'ignore' }); return true; }
   catch { return false; }
 }
 
-// ── Bash command approval UI ──────────────────────────────────────────────────
+// ── Print helpers ─────────────────────────────────────────────────────────────
+const T = '  ';  // indent
+const dim  = (s: string) => chalk.dim(s);
+const teal = (s: string) => chalk.hex('#00efd4')(s);
+const ok   = (s: string) => chalk.green(`✓ ${s}`);
+const sep  = () => console.log(dim(T + '─'.repeat(54)));
+const kv   = (k: string, v: string, badge?: string) =>
+  console.log(`${T}${dim(k.padEnd(14))}${chalk.bold(v)}${badge ? '  ' + badge : ''}`);
+
+// ── Shell command approval ────────────────────────────────────────────────────
 async function runWithApproval(cmd: string, cwd?: string): Promise<boolean> {
-  const boxW = Math.min(Math.max(cmd.length + 4, 52), 72);
-  const inner = cmd.padEnd(boxW - 4);
+  const w = Math.min(Math.max(cmd.length + 6, 50), 74);
   console.log();
-  console.log(chalk.dim('  ╔══ SHELL COMMAND ') + chalk.dim('═'.repeat(boxW - 18)) + chalk.dim('╗'));
-  console.log(`  ║  ${chalk.bold.white(inner)}  ` + chalk.dim('║'));
-  console.log(chalk.dim('  ╚') + chalk.dim('═'.repeat(boxW)) + chalk.dim('╝'));
+  console.log(dim(`${T}┌─ SHELL COMMAND ${'─'.repeat(w - 16)}┐`));
+  console.log(`${T}│  ${chalk.white.bold(cmd.padEnd(w - 5))}│`);
+  console.log(dim(`${T}└${'─'.repeat(w - 1)}┘`));
 
   const { action } = await inquirer.prompt<{ action: string }>([{
     type: 'expand', name: 'action',
-    message: chalk.white('  Run?'),
+    message: `${T}Run?`,
     default: 'y',
     choices: [
       { key: 'y', name: 'Yes — run it', value: 'yes'  },
@@ -60,20 +64,18 @@ async function runWithApproval(cmd: string, cwd?: string): Promise<boolean> {
   let finalCmd = cmd;
   if (action === 'edit') {
     const { edited } = await inquirer.prompt<{ edited: string }>([{
-      type: 'input', name: 'edited',
-      message: chalk.white('  Command:'),
-      default: cmd,
+      type: 'input', name: 'edited', message: `${T}Command:`, default: cmd,
     }]);
     finalCmd = edited.trim() || cmd;
   }
-  if (action === 'no') { console.log(chalk.dim('  Skipped.\n')); return false; }
+  if (action === 'no') { console.log(dim(`${T}Skipped.\n`)); return false; }
 
   try {
     execSync(finalCmd, { stdio: 'ignore', cwd });
-    console.log(chalk.green('  ✓ Done\n'));
+    console.log(chalk.green(`${T}✓ Done\n`));
     return true;
   } catch (e: any) {
-    console.log(chalk.red(`  ✗ ${e.message}\n`));
+    console.log(chalk.red(`${T}✗ ${e.message}\n`));
     return false;
   }
 }
@@ -82,17 +84,16 @@ async function runWithApproval(cmd: string, cwd?: string): Promise<boolean> {
 async function resolveProjectDir(): Promise<string> {
   const { mode } = await inquirer.prompt<{ mode: string }>([{
     type: 'list', name: 'mode',
-    message: chalk.white('Project directory:'),
+    message: 'Project directory:',
     choices: [
-      { name: '✦  Create new folder on Desktop', value: 'new'      },
-      { name: '📁  Use existing directory',       value: 'existing' },
+      { name: '◆  Create new folder on Desktop', value: 'new'      },
+      { name: '◈  Use existing directory',        value: 'existing' },
     ],
   }]);
 
   if (mode === 'new') {
     const { name } = await inquirer.prompt<{ name: string }>([{
-      type: 'input', name: 'name',
-      message: chalk.white('Project name:'),
+      type: 'input', name: 'name', message: 'Project name:',
       validate: (v: string) => v.trim().length > 0 || 'Cannot be empty',
     }]);
     const slug = name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -100,13 +101,12 @@ async function resolveProjectDir(): Promise<string> {
     await runWithApproval(`mkdir -p '${dir}'`);
     fs.mkdirSync(dir, { recursive: true });
     await runWithApproval(`git init '${dir}'`);
-    console.log(chalk.dim(`  Created: ${dir}\n`));
+    console.log(dim(`${T}Created: ${dir}\n`));
     return dir;
   }
 
   const { dir } = await inquirer.prompt<{ dir: string }>([{
-    type: 'input', name: 'dir',
-    message: chalk.white('Directory path:'),
+    type: 'input', name: 'dir', message: 'Directory path:',
     default: process.cwd(),
     validate: (v: string) => fs.existsSync(v.trim()) || 'Directory does not exist',
   }]);
@@ -118,30 +118,32 @@ async function main(): Promise<void> {
   cleanOldSessions();
   await showBanner();
 
-  // ── Brief ──────────────────────────────────────────────────────────────────
+  // ── Brief ─────────────────────────────────────────────────────────────────
   let brief = process.argv.slice(2).filter(a => !a.startsWith('--')).join(' ').trim();
   if (!brief) {
     const { b } = await inquirer.prompt<{ b: string }>([{
-      type: 'input', name: 'b',
-      message: chalk.white('Project brief:'),
+      type: 'input', name: 'b', message: 'Project brief:',
       validate: (v: string) => v.trim().length > 0 || 'Cannot be empty',
     }]);
     brief = b.trim();
   }
   console.log();
 
-  // ── Complexity level ───────────────────────────────────────────────────────
-  const complexityProfile = await pickComplexity();
-  console.log(chalk.dim(`\n  Stack: ${complexityProfile.techStack}\n`));
+  // ── Exclusions ─────────────────────────────────────────────────────────────
+  const { exclusions } = await inquirer.prompt<{ exclusions: string }>([{
+    type: 'input', name: 'exclusions',
+    message: dim('Anything to exclude?') + chalk.dim('  (e.g. no animations, no sound, keep it dead simple · Enter = nothing excluded)'),
+  }]);
+  if (exclusions.trim()) brief += `\n\nEXCLUSIONS: ${exclusions.trim()}`;
+  console.log(dim(`${T}Brief refined with your preferences.\n`));
 
-  // ── 2-question Q&A to sharpen the brief ───────────────────────────────────
+  // ── Complexity ─────────────────────────────────────────────────────────────
+  const complexityProfile = await pickComplexity();
+  console.log(dim(`${T}Stack: ${complexityProfile.techStack}\n`));
+
   const qaExtras = await runComplexityQA(complexityProfile);
-  if (qaExtras) {
-    brief = brief + qaExtras;
-    console.log(chalk.dim('\n  Brief refined with your preferences.\n'));
-  } else {
-    console.log();
-  }
+  if (qaExtras) brief += qaExtras;
+  console.log();
 
   // ── CLI selection ──────────────────────────────────────────────────────────
   const available = [
@@ -152,7 +154,7 @@ async function main(): Promise<void> {
 
   const { selectedIds } = await inquirer.prompt<{ selectedIds: CLIId[] }>([{
     type: 'checkbox', name: 'selectedIds',
-    message: chalk.white('Select CLIs (min 2):'),
+    message: 'Select CLIs (min 2):',
     choices: available.map(c => ({
       name: c.installed ? c.label : `${c.label}  ${chalk.red('[not installed]')}`,
       value: c.id,
@@ -166,58 +168,58 @@ async function main(): Promise<void> {
   // ── Execution mode ─────────────────────────────────────────────────────────
   const { execMode } = await inquirer.prompt<{ execMode: string }>([{
     type: 'list', name: 'execMode',
-    message: chalk.white('Execution mode:'),
+    message: 'Execution mode:',
     choices: [
       {
-        name: `${chalk.bold('Sequential Exchange')}   ${chalk.dim('Both build the full project → exchange & review')}`,
+        name: `Sequential Exchange   ${dim('Both build full project → exchange & review')}`,
         value: 'sequential',
       },
       {
-        name: `${chalk.hex('#00efd4').bold('Parallel Tracks')}      ${chalk.dim('Each CLI owns a domain → they help each other → FASTER')}  ${chalk.hex('#ffdd00').bold('⚡ NEW')}`,
+        name: `${teal('Parallel Tracks')}       ${dim('Each CLI owns a domain → help each other → FASTER')}  ${chalk.hex('#ffdd00').bold('⚡ NEW')}`,
         value: 'parallel-tracks',
       },
     ],
   }]);
   console.log();
 
-  // ── Connection method — auto-select fastest ────────────────────────────────
-  const effectiveMethod = 'named-pipe';
-  const methodMeta = CONNECTION_METHODS.find(m => m.id === effectiveMethod);
-  console.log(
-    chalk.dim(`  Connection : `) +
-    chalk.bold(methodMeta?.name ?? effectiveMethod) +
-    chalk.hex('#ffdd00').bold(`  ${methodMeta?.badge ?? '⚡ FASTEST'}`) +
-    '\n'
-  );
+  // ── Connection: always MCP ─────────────────────────────────────────────────
+  const effectiveMethod = 'mcp';
+  sep();
+  kv('Connection', 'MCP  (Model Context Protocol)', teal('⬡ collaborative bridge'));
+  sep();
+  console.log();
 
   // ── Project directory ──────────────────────────────────────────────────────
   const projectDir = await resolveProjectDir();
 
-  // ── Connect ────────────────────────────────────────────────────────────────
-  const connectSpinner = ora('Connecting to CLIs...').start();
-  await new Promise(r => setTimeout(r, 400));
+  // ── Connect spinner ────────────────────────────────────────────────────────
+  const connectSpinner = ora({ text: dim('Wiring MCP bridge...'), spinner: 'dots' }).start();
+  await new Promise(r => setTimeout(r, 500));
   connectSpinner.succeed(chalk.green(`Connected: ${selectedIds.join(', ')}`));
 
   // ── Role assignment ────────────────────────────────────────────────────────
   let activeCLIs;
 
   if (execMode === 'parallel-tracks') {
-    // Parallel tracks: decompose brief, assign track preambles
-    const trackSpinner = ora('Decomposing project into parallel tracks...').start();
+    const trackSpinner = ora({ text: dim('Decomposing project into parallel tracks...'), spinner: 'dots' }).start();
     const decomp = await decomposeToTracks(brief, complexityProfile);
     trackSpinner.succeed(chalk.green('Track decomposition complete'));
 
-    console.log('\n' + chalk.bold('  Parallel Track Assignment\n'));
-    console.log(`  ${chalk.hex('#00efd4').bold('Track A')}  ${chalk.bold(decomp.trackA.label)}`);
-    console.log(chalk.dim(`          ${decomp.trackA.scope}\n`));
-    console.log(`  ${chalk.hex('#4285f4').bold('Track B')}  ${chalk.bold(decomp.trackB.label)}`);
-    console.log(chalk.dim(`          ${decomp.trackB.scope}\n`));
-    console.log(chalk.dim(`  Shared interfaces: ${decomp.interfacesHint}\n`));
+    console.log();
+    sep();
+    console.log(`${T}${teal('Track A')}  ${chalk.bold(decomp.trackA.label)}`);
+    console.log(dim(`${T}         ${decomp.trackA.scope}`));
+    console.log();
+    console.log(`${T}${chalk.hex('#4285f4').bold('Track B')}  ${chalk.bold(decomp.trackB.label)}`);
+    console.log(dim(`${T}         ${decomp.trackB.scope}`));
+    console.log();
+    console.log(dim(`${T}Shared interfaces: ${decomp.interfacesHint}`));
+    sep();
+    console.log();
 
-    // Let user confirm or reassign tracks to CLIs
     const { confirm } = await inquirer.prompt<{ confirm: boolean }>([{
       type: 'confirm', name: 'confirm',
-      message: chalk.white(`  Assign Track A → ${selectedIds[0]},  Track B → ${selectedIds[1]}?`),
+      message: `Assign Track A → ${selectedIds[0]},  Track B → ${selectedIds[1]}?`,
       default: true,
     }]);
 
@@ -226,12 +228,12 @@ async function main(): Promise<void> {
     } else {
       const { aId } = await inquirer.prompt<{ aId: CLIId }>([{
         type: 'list', name: 'aId',
-        message: chalk.white(`  Who builds Track A (${decomp.trackA.label})?`),
+        message: `Who builds Track A (${decomp.trackA.label})?`,
         choices: selectedIds,
       }]);
       const { bId } = await inquirer.prompt<{ bId: CLIId }>([{
         type: 'list', name: 'bId',
-        message: chalk.white(`  Who builds Track B (${decomp.trackB.label})?`),
+        message: `Who builds Track B (${decomp.trackB.label})?`,
         choices: selectedIds.filter(id => id !== aId),
       }]);
       const reordered = [aId, bId, ...selectedIds.filter(id => id !== aId && id !== bId)] as CLIId[];
@@ -239,21 +241,20 @@ async function main(): Promise<void> {
     }
 
   } else {
-    // Sequential: quick assign or full capability analysis
     const { roleMode } = await inquirer.prompt<{ roleMode: string }>([{
       type: 'list', name: 'roleMode',
-      message: chalk.white('Role assignment:'),
+      message: 'Role assignment:',
       choices: [
         {
-          name: `${chalk.hex('#ffdd00').bold('⚡ Quick')}       ${chalk.dim('Claude → Architect · Gemini → Executor  (instant)')}`,
+          name: `${chalk.hex('#ffdd00').bold('⚡ Quick')}       ${dim('Claude → Architect  ·  Gemini → Executor  (instant)')}`,
           value: 'quick',
         },
         {
-          name: `${chalk.bold('Auto-analyse')}  ${chalk.dim('Claude scores both CLIs then assigns roles  (~15s)')}`,
+          name: `Auto-analyse   ${dim('Scores both CLIs then assigns roles  (~15s)')}`,
           value: 'auto',
         },
         {
-          name: 'Manual         I pick who does what',
+          name: `Manual         ${dim('I pick who does what')}`,
           value: 'manual',
         },
       ],
@@ -261,24 +262,21 @@ async function main(): Promise<void> {
 
     let analysis = FALLBACK_ANALYSIS;
     if (roleMode === 'auto') {
-      const analysisSpinner = ora('Analysing CLI capabilities (~15s)...').start();
+      const analysisSpinner = ora({ text: dim('Analysing CLI capabilities...'), spinner: 'dots' }).start();
       analysis = await generateAnalysis(projectDir);
       analysisSpinner.succeed(chalk.green('Capability analysis complete'));
-      console.log('\n' + chalk.bold('  Capability Comparison\n'));
+      console.log();
       renderAnalysisTable(analysis);
     } else if (roleMode === 'quick') {
-      console.log(chalk.dim(`\n  Claude → Architect  ·  Gemini → Executor\n`));
+      console.log(dim(`${T}Claude → Architect  ·  Gemini → Executor\n`));
     }
 
     if (roleMode === 'manual') {
       const { archId } = await inquirer.prompt<{ archId: CLIId }>([{
-        type: 'list', name: 'archId',
-        message: chalk.white('  Who is the Architect?'),
-        choices: selectedIds,
+        type: 'list', name: 'archId', message: 'Who is the Architect?', choices: selectedIds,
       }]);
       const { execId } = await inquirer.prompt<{ execId: CLIId }>([{
-        type: 'list', name: 'execId',
-        message: chalk.white('  Who is the Executor?'),
+        type: 'list', name: 'execId', message: 'Who is the Executor?',
         choices: selectedIds.filter(id => id !== archId),
       }]);
       activeCLIs = assignRolesManually(selectedIds, archId, execId);
@@ -286,48 +284,47 @@ async function main(): Promise<void> {
       activeCLIs = assignRolesFromAnalysis(analysis, selectedIds);
     }
 
-    console.log('\n' + chalk.bold('  Role Assignment\n'));
+    console.log();
+    sep();
     for (const cli of activeCLIs.configs) {
-      const icon = cli.role === 'architect' ? '🏛' : cli.role === 'executor' ? '⚙' : '🔍';
-      console.log(`  ${icon}  ${chalk.bold(cli.name.padEnd(32))}${chalk.dim(cli.role.toUpperCase())}`);
+      const icon = cli.role === 'architect' ? '◆' : cli.role === 'executor' ? '◈' : '◦';
+      console.log(`${T}${teal(icon)}  ${chalk.bold(cli.name.padEnd(30))}${dim(cli.role.toUpperCase())}`);
     }
-    console.log(chalk.dim(`\n  ${getRoleReason(analysis)}\n`));
+    console.log(dim(`\n${T}${getRoleReason(analysis)}`));
+    sep();
+    console.log();
   }
 
-  // ── Inject complexity constraints into every CLI's preamble ──────────────────
+  // ── Inject complexity constraints ──────────────────────────────────────────
   const constraintBlock = buildConstraintBlock(complexityProfile);
   for (const cli of activeCLIs.configs) {
     cli.preamble = constraintBlock + '\n' + cli.preamble;
   }
 
   // ── Mode info ──────────────────────────────────────────────────────────────
-  const hasTmux = tmuxAvailable();
-  if (!hasTmux) {
-    console.log(chalk.yellow('  ⚠  tmux not found — install it for the visual dashboard\n'));
+  if (!tmuxAvailable()) {
+    console.log(chalk.yellow(`${T}⚠  tmux not found — install it for the visual dashboard\n`));
   } else {
     const modeLabel = execMode === 'parallel-tracks'
-      ? chalk.hex('#00efd4')('parallel tracks (each CLI owns a domain, INTERFACES.md as shared contract)')
-      : chalk.hex('#00efd4')('sequential exchange (parallel build → review each other → fill gaps)');
-    console.log(`  Mode: ${modeLabel}\n`);
+      ? teal('parallel tracks')
+      : teal('sequential exchange');
+    console.log(dim(`${T}Mode: `) + modeLabel + '\n');
   }
 
-  // ── Safe mode toggle ───────────────────────────────────────────────────────
+  // ── Safe mode ──────────────────────────────────────────────────────────────
   const { safeMode } = await inquirer.prompt<{ safeMode: boolean }>([{
     type: 'confirm', name: 'safeMode',
-    message: chalk.white('Enable safe mode?') + chalk.dim(' (monitors for dangerous commands — slower)'),
+    message: 'Enable safe mode?' + dim('  (monitors for dangerous commands — slower)'),
     default: false,
   }]);
 
-  // ── Confirm ────────────────────────────────────────────────────────────────
+  // ── Launch ─────────────────────────────────────────────────────────────────
   const { go } = await inquirer.prompt<{ go: boolean }>([{
-    type: 'confirm', name: 'go',
-    message: chalk.white('Ready to build?'),
-    default: true,
+    type: 'confirm', name: 'go', message: 'Ready to build?', default: true,
   }]);
-  if (!go) { console.log(chalk.dim('\nAborted.\n')); process.exit(0); }
+  if (!go) { console.log(dim('\nAborted.\n')); process.exit(0); }
   console.log();
 
-  // ── Orchestrate ────────────────────────────────────────────────────────────
   await runVisualOrchestration(brief, effectiveMethod, activeCLIs, projectDir, safeMode);
 }
 

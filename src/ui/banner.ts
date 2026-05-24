@@ -65,20 +65,19 @@ function renderFrame(word: string, showSubtitle: boolean): void {
 
     const dot = chalk.hex('#00efd4')('◈');
     const label = chalk.white.bold(' Multi-CLI Orchestrator');
-    const dim = chalk.dim(`  ·  v${version}  ·  Claude  ×  Gemini  ×  Codex`);
-    process.stdout.write(`${indent}${dot}${label}${dim}\n`);
+    const dimLine = chalk.dim(`  ·  v${version}  ·  Claude  ×  Gemini  ×  Codex`);
+    process.stdout.write(`${indent}${dot}${label}${dimLine}\n`);
 
     const tagline = chalk.hex('#00b8ff')('  Two minds. One build. Zero waiting.');
     const pulse = chalk.dim('  ⟨ neural link ready ⟩');
     process.stdout.write(`${indent}${chalk.hex('#00efd4')('◈')}${tagline}${pulse}\n`);
 
-    // Quota / session indicator
     const sessionDot = chalk.hex('#00ff88')('●');
     const sessionLine = chalk.dim('  Session active  ·  ') +
       chalk.hex('#00efd4')('claude.ai/usage') +
       chalk.dim(' for quota  ·  ') +
-      chalk.hex('#00b8ff')('FIFO + TCP') +
-      chalk.dim(' signaling ready');
+      chalk.hex('#00efd4')('⬡ MCP') +
+      chalk.dim(' collaborative bridge ready');
     process.stdout.write(`${indent}${sessionDot}${sessionLine}\n`);
 
     process.stdout.write(indent + sep + '\n');
