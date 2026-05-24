@@ -67,16 +67,59 @@ get_spin_msg() {
   eval echo "\$SPIN_MSG_${i}"
 }
 
+agent_symbol() {
+  case "$1" in
+    claude) echo "◉" ;;
+    gemini) echo "◆" ;;
+    codex)  echo "◎" ;;
+    *)      echo "•" ;;
+  esac
+}
+
+compact_activity() {
+  local line="$1"
+  case "$line" in
+    *error*|*Error*|*failed*|*Failed*) echo "error" ;;
+    *test*|*jest*|*vitest*|*tsc*|*build*) echo "validating" ;;
+    *fix*|*patch*|*refactor*) echo "fixing" ;;
+    *write*|*create*|*implement*) echo "writing" ;;
+    *plan*|*architect*|*design*) echo "designing" ;;
+    *review*|*analy*|*inspect*) echo "reviewing" ;;
+    "") echo "warming up" ;;
+    *) echo "working" ;;
+  esac
+}
+
+agent_state_line() {
+  local parts=""
+  for id in $ALL_IDS; do
+    local log="${SESSION_DIR}/${id}_p${CUR_PHASE}.log"
+    local col; col=$(cli_col "$id")
+    local sym; sym=$(agent_symbol "$id")
+    local raw=""
+    [ -f "$log" ] && raw=$(tail -n 1 "$log" 2>/dev/null | tr -d '\r')
+    local act; act=$(compact_activity "$raw")
+    local item="${col}${sym}${R} ${id}:${act}"
+    if [ -z "$parts" ]; then
+      parts="$item"
+    else
+      parts="${parts}  ${DIM}|${R}  $item"
+    fi
+  done
+  echo "$parts"
+}
+
 start_spinner() {
   (
     local i=0; local mi=0
     while true; do
       local c="${SPIN_FRAMES:$((i % 8)):1}"
       local msg; msg=$(get_spin_msg "$mi")
-      printf "\r  ${TEAL}${c}${R}  ${DIM}${msg}...${R}                    "
+      local states; states=$(agent_state_line)
+      printf "\r\033[K  ${TEAL}${c}${R}  ${DIM}${msg}...${R}  ${states}"
       i=$((i+1))
       [ $((i % 16)) -eq 0 ] && mi=$((mi+1))
-      sleep 0.12
+      sleep 0.35
     done
   ) &
   SPINNER_PID=$!
@@ -227,7 +270,7 @@ handle_command() {
 
 poll_command() {
   local cmd
-  if IFS= read -r -t 0.2 cmd; then
+  if IFS= read -r -t 1 cmd < /dev/tty; then
     [ -z "$cmd" ] && return
     handle_command "$cmd"
   fi
@@ -312,7 +355,7 @@ wait_phase() {
       fi
     fi
 
-    sleep 2
+    sleep 1
   done
 }
 
