@@ -53,9 +53,9 @@ idx_for() {
 
 run_cmd_for() {
   case "$1" in
-    gemini) echo 'gemini --yolo -p "$PROMPT" 2>&1 | sed "s/^/💎 /" | tee -a "$LOGFILE"' ;;
-    codex)  echo 'codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT" 2>&1 | sed "s/^/🌀 /" | tee -a "$LOGFILE"' ;;
-    *)      echo 'claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | sed "s/^/☁️ /" | tee -a "$LOGFILE"' ;;
+    gemini) echo 'gemini --yolo -p "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/💎 /" | tee -a "$LOGFILE"' ;;
+    codex)  echo 'codex exec --ask-for-approval never "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/🌀 /" | tee -a "$LOGFILE"' ;;
+    *)      echo 'claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/☁️ /" | tee -a "$LOGFILE"' ;;
   esac
 }
 
@@ -102,7 +102,7 @@ agent_state_line() {
     local col; col=$(cli_col "$id")
     local sym; sym=$(agent_symbol "$id")
     local raw=""
-    [ -f "$log" ] && raw=$(tail -n 1 "$log" 2>/dev/null | tr -d '\r')
+    [ -f "$log" ] && raw=$(tail -n 1 "$log" 2>/dev/null | LC_ALL=C tr -d '\r' 2>/dev/null)
     local act; act=$(compact_activity "$raw")
     local item="${col}${sym}${R} ${id}:${act}"
     if [ -z "$parts" ]; then
@@ -207,7 +207,7 @@ print_summary() {
     local name; name=$(title_case "$id")
     printf "\n  ${col}${BOLD}${name}${R}\n"
     if [ -f "$log" ]; then
-      tail -n 4 "$log" | sed 's/^/    /'
+      tail -n 4 "$log" | LC_ALL=C sed 's/^/    /'
     else
       printf "    ${DIM}(no log yet)${R}\n"
     fi
@@ -255,7 +255,7 @@ trigger_rescue() {
   stop_spinner
   event "$RED" "🆘" "RESCUE" "Agent ${failed_id} failed. Dispatching helpers: ${helpers}"
   
-  local log_snippet; log_snippet=$(tail -n 25 "${SESSION_DIR}/${failed_id}_p${CUR_PHASE}.log" 2>/dev/null | sed 's/"/\\"/g')
+  local log_snippet; log_snippet=$(tail -n 25 "${SESSION_DIR}/${failed_id}_p${CUR_PHASE}.log" 2>/dev/null | LC_ALL=C sed 's/"/\\"/g')
   
   for helper in $helpers; do
     local idx; idx=$(idx_for "$helper")

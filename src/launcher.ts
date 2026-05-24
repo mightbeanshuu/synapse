@@ -81,11 +81,11 @@ function writeRunScript(
   let runCmd: string;
   const symbolPrefix = `${cli.symbol} `;
   if (cli.id === 'gemini') {
-    runCmd = `gemini --yolo -p "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
+    runCmd = `gemini --yolo -p "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else if (cli.id === 'codex') {
-    runCmd = `codex exec --dangerously-bypass-approvals-and-sandbox "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
+    runCmd = `codex exec --ask-for-approval never "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else {
-    runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
+    runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   }
 
   const guidanceBlock = phase === 2 ? `
