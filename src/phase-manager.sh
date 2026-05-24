@@ -7,8 +7,8 @@ shift 5
 
 P1_TIMEOUT=1500
 P2_TIMEOUT=1200
-STALL_WARN=8
-STALL_KILL=40
+STALL_WARN=12
+STALL_KILL=60
 
 CLI_ID_0=""; CLI_ID_1=""; CLI_ID_2=""; _ci=0
 for _arg in "$@"; do
