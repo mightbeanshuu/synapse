@@ -6,17 +6,66 @@ import chalk from 'chalk';
 import inquirer from 'inquirer';
 import ora from 'ora';
 import { showBanner } from './ui/banner';
-import { CONNECTION_METHODS } from './connect/methods';
+import { CONNECTION_METHODS, pickFastest } from './connect/methods';
 import { generateAnalysis, renderAnalysisTable } from './analyzer';
 import { assignRolesFromAnalysis, getRoleReason } from './assigner';
 import { runVisualOrchestration } from './visual-orchestrator';
 import { tmuxAvailable } from './launcher';
 import type { CLIId } from './types';
 
-// ── CLI availability checks ──────────────────────────────────────────────────
+// ── CLI availability ──────────────────────────────────────────────────────────
 function cliAvailable(bin: string): boolean {
   try { execSync(`which ${bin}`, { stdio: 'ignore' }); return true; }
   catch { return false; }
+}
+
+// ── Bash command approval UI ──────────────────────────────────────────────────
+async function runWithApproval(cmd: string, cwd?: string): Promise<boolean> {
+  const boxWidth = Math.min(Math.max(cmd.length + 4, 50), 70);
+  const inner = cmd.padEnd(boxWidth - 4);
+
+  console.log();
+  console.log(chalk.dim('  ╔══ SHELL COMMAND ') + chalk.dim('═'.repeat(boxWidth - 18)) + chalk.dim('╗'));
+  console.log(`  ║  ${chalk.bold.white(inner)}  ` + chalk.dim('║'));
+  console.log(chalk.dim('  ╚') + chalk.dim('═'.repeat(boxWidth)) + chalk.dim('╝'));
+
+  const { action } = await inquirer.prompt<{ action: string }>([{
+    type: 'expand',
+    name: 'action',
+    message: chalk.white('  Run?'),
+    default: 'y',
+    choices: [
+      { key: 'y', name: 'Yes — run it',    value: 'yes'  },
+      { key: 'n', name: 'No — skip',        value: 'no'   },
+      { key: 'e', name: 'Edit command',     value: 'edit' },
+    ],
+  }]);
+
+  let finalCmd = cmd;
+
+  if (action === 'edit') {
+    const { edited } = await inquirer.prompt<{ edited: string }>([{
+      type: 'input',
+      name: 'edited',
+      message: chalk.white('  Command:'),
+      default: cmd,
+    }]);
+    finalCmd = edited.trim() || cmd;
+  }
+
+  if (action === 'no') {
+    console.log(chalk.dim('  Skipped.\n'));
+    return false;
+  }
+
+  try {
+    execSync(finalCmd, { stdio: 'ignore', cwd });
+    console.log(chalk.green(`  ✓ Done\n`));
+    return true;
+  } catch (e: any) {
+    console.log(chalk.red(`  ✗ Failed: ${e.message}\n`));
+    return false;
+  }
 }
 
 // ── Project directory ────────────────────────────────────────────────────────
@@ -26,7 +75,7 @@ async function resolveProjectDir(): Promise<string> {
     name: 'mode',
     message: chalk.white('Project directory:'),
     choices: [
-      { name: '✦  Create new folder on Desktop', value: 'new' },
+      { name: '✦  Create new folder on Desktop', value: 'new'      },
       { name: '📁  Use existing directory',       value: 'existing' },
     ],
   }]);
@@ -39,9 +88,12 @@ async function resolveProjectDir(): Promise<string> {
     }]);
     const slug = name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
     const dir = path.join(os.homedir(), 'Desktop', slug);
-    fs.mkdirSync(dir, { recursive: true });
-    try { execSync('git init', { cwd: dir, stdio: 'ignore' }); } catch {}
-    console.log(chalk.dim(`\n  Created: ${dir}\n`));
+
+    await runWithApproval(`mkdir -p '${dir}'`);
+    fs.mkdirSync(dir, { recursive: true }); // ensure it exists even if skipped
+    await runWithApproval(`git init '${dir}'`);
+
+    console.log(chalk.dim(`  Created: ${dir}\n`));
     return dir;
   }
 
@@ -56,7 +108,7 @@ async function resolveProjectDir(): Promise<string> {
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
-  showBanner();
+  await showBanner();
 
   // ── Brief ─────────────────────────────────────────────────────────────────
   let brief = process.argv.slice(2).filter(a => !a.startsWith('--')).join(' ').trim();
@@ -72,9 +124,9 @@ async function main(): Promise<void> {
 
   // ── CLI selection ──────────────────────────────────────────────────────────
   const available: Array<{ id: CLIId; label: string; installed: boolean }> = [
-    { id: 'claude', label: 'Claude Code    (Architect by default)',  installed: cliAvailable('claude') },
-    { id: 'gemini', label: 'Gemini CLI     (Executor by default)',   installed: cliAvailable('gemini') },
-    { id: 'codex',  label: 'Codex CLI      (Reviewer — needs OPENAI_API_KEY)', installed: cliAvailable('codex')  },
+    { id: 'claude', label: 'Claude Code    (Architect by default)',                  installed: cliAvailable('claude') },
+    { id: 'gemini', label: 'Gemini CLI     (Executor by default)',                   installed: cliAvailable('gemini') },
+    { id: 'codex',  label: 'Codex CLI      (Reviewer — needs OPENAI_API_KEY)',       installed: cliAvailable('codex')  },
   ];
 
   const { selectedIds } = await inquirer.prompt<{ selectedIds: CLIId[] }>([{
@@ -94,20 +146,30 @@ async function main(): Promise<void> {
 
   console.log();
 
-  // ── Connection method ──────────────────────────────────────────────────────
-  const { methodId } = await inquirer.prompt<{ methodId: string }>([{
-    type: 'list', name: 'methodId',
-    message: chalk.white('Connection method:'),
-    choices: CONNECTION_METHODS.map(m => ({
-      name: `${m.icon}  ${chalk.bold(m.name.padEnd(22))}${chalk.dim(m.description)}` +
-        (!m.implemented ? chalk.red('  [coming soon]') : ''),
-      value: m.id,
-      short: m.name,
-    })),
+  // ── Connection method (multi-select with speed bars) ───────────────────────
+  const { methodIds } = await inquirer.prompt<{ methodIds: string[] }>([{
+    type: 'checkbox',
+    name: 'methodIds',
+    message: chalk.white('Connection methods (select any — fastest available wins):'),
+    choices: CONNECTION_METHODS.map(m => {
+      const speedBar = m.speedBar
+        ? chalk.hex('#00efd4')(m.speedBar) + '  ' + chalk.bold(m.speedLabel ?? '')
+        : '';
+      const badge = m.badge ? chalk.hex('#ffdd00').bold(`  ${m.badge}`) : '';
+      const comingSoon = !m.implemented ? chalk.red('  [coming soon]') : '';
+      return {
+        name: `${m.icon}  ${chalk.bold(m.name.padEnd(22))}${speedBar}${badge}${comingSoon}`,
+        value: m.id,
+        checked: m.id === 'named-pipe',
+        disabled: !m.implemented,
+      };
+    }),
+    validate: (v: string[]) => v.length >= 1 || 'Select at least one method',
   }]);
-  const selectedMethod = CONNECTION_METHODS.find(m => m.id === methodId)!;
-  const effectiveMethod = selectedMethod.implemented ? methodId : 'parallel-streams';
-  if (!selectedMethod.implemented) console.log(chalk.yellow('⚠ Falling back to Parallel Streams\n'));
+
+  const effectiveMethod = pickFastest(methodIds);
+  const methodName = CONNECTION_METHODS.find(m => m.id === effectiveMethod)?.name ?? effectiveMethod;
+  console.log(chalk.dim(`\n  Using: ${chalk.bold(methodName)} (fastest from your selection)\n`));
 
   // ── Project directory ──────────────────────────────────────────────────────
   const projectDir = await resolveProjectDir();
@@ -117,7 +179,7 @@ async function main(): Promise<void> {
   await new Promise(r => setTimeout(r, 500));
   connectSpinner.succeed(chalk.green(`Connected: ${selectedIds.join(', ')}`));
 
-  // ── Analysis (architect/executor from Claude vs Gemini scores) ───────────
+  // ── Analysis ──────────────────────────────────────────────────────────────
   const analysisSpinner = ora('Claude is analysing CLI capabilities (~15s)...').start();
   const analysis = await generateAnalysis(projectDir);
   analysisSpinner.succeed(chalk.green('Capability analysis complete'));

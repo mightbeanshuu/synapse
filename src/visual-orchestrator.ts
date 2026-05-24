@@ -4,13 +4,18 @@ import chalk from 'chalk';
 import ora from 'ora';
 import inquirer from 'inquirer';
 import { Bridge } from './bridge';
-import { launchDashboard, relaunchPhase, waitForMarkers } from './launcher';
+import { launchDashboard, relaunchPhase } from './launcher';
+import { createSignalingChannel } from './connect/signaling';
 import type { CLIConfig, ActiveCLIs } from './types';
 
 // ── Prompt builders ───────────────────────────────────────────────────────────
 
-function buildPhase1Prompt(cli: CLIConfig, brief: string, projectDir: string, bridgePath: string): string {
-  const doneMarker = `${cli.id.toUpperCase()}_P1_DONE`;
+function buildPhase1Prompt(
+  cli: CLIConfig,
+  brief: string,
+  projectDir: string,
+  signalCmd: string
+): string {
   return `${cli.preamble}
 
 ---
@@ -26,7 +31,7 @@ WORKING DIRECTORY: ${projectDir}
 3. Write complete, working code — no stubs, no TODOs, no pseudocode.
 4. After writing files, verify they compile/run: npx tsc --noEmit, npm test, etc.
 5. When you are 100% done, run this EXACT bash command:
-   echo "${doneMarker}" >> "${bridgePath}"
+   ${signalCmd}
 
 Work in: ${projectDir}
 Start building now.`;
@@ -36,11 +41,10 @@ function buildPhase2Prompt(
   cli: CLIConfig,
   brief: string,
   projectDir: string,
-  bridgePath: string,
+  signalCmd: string,
   peerNames: string[],
   userGuidance: string
 ): string {
-  const doneMarker = `${cli.id.toUpperCase()}_P2_DONE`;
   const guidanceBlock = userGuidance.trim()
     ? `\nUSER GUIDANCE FOR PHASE 2:\n${userGuidance}\n`
     : '';
@@ -62,7 +66,7 @@ PHASE 2 TASKS:
 3. Fix and add what's missing — create real files, edit existing ones
 4. Run the full project end-to-end and verify it works
 5. When you are 100% done, run this EXACT bash command:
-   echo "${doneMarker}" >> "${bridgePath}"
+   ${signalCmd}
 
 Start reviewing and improving now.`;
 }
@@ -101,28 +105,36 @@ export async function runVisualOrchestration(
   console.log(chalk.dim(`  CLIs       : ${clis.map(c => c.name).join('  ·  ')}`));
   console.log(chalk.dim(`  Output     : ${sessionDir}\n`));
 
+  // Build all marker names upfront so FIFO/TCP can set up for both phases
+  const allMarkers = [
+    ...clis.map(c => `${c.id.toUpperCase()}_P1_DONE`),
+    ...clis.map(c => `${c.id.toUpperCase()}_P2_DONE`),
+  ];
+  const signalCh = await createSignalingChannel(connectionMethod, allMarkers, bridge.path);
+
   // ── Phase 1 ──────────────────────────────────────────────────────────────
   console.log(chalk.bold.white('┌─────────────────────────────────────────┐'));
   console.log(chalk.bold.white('│  PHASE 1 — Parallel Build               │'));
   console.log(chalk.bold.white('└─────────────────────────────────────────┘\n'));
 
-  const p1Files = clis.map((cli, i) => {
+  const p1Files = clis.map(cli => {
+    const doneMarker = `${cli.id.toUpperCase()}_P1_DONE`;
     const f = path.join(sessionDir, `${cli.id}_p1.txt`);
-    fs.writeFileSync(f, buildPhase1Prompt(cli, brief, projectDir, bridge.path));
+    fs.writeFileSync(f, buildPhase1Prompt(cli, brief, projectDir, signalCh.signalCmdFor(doneMarker)));
     return f;
   });
 
   launchDashboard({
     clis, promptFiles: p1Files, bridgePath: bridge.path,
-    phase: 1, projectDir, sessionDir,
+    phase: 1, projectDir, sessionDir, signalingChannel: signalCh,
   });
 
   console.log(chalk.hex('#00efd4')('  ⬡  Dashboard opened → watch the new Terminal window\n'));
 
   const p1Markers = clis.map(c => `${c.id.toUpperCase()}_P1_DONE`);
   const p1Spinner = ora('Phase 1 building...').start();
-  const p1Done = await waitForMarkers(
-    bridge.path, p1Markers, 20 * 60 * 1000,
+  const p1Done = await signalCh.waitAll(
+    p1Markers, 20 * 60 * 1000,
     (found, total) => { progressLine(found, total, clis); }
   );
   process.stdout.write('\n');
@@ -152,9 +164,10 @@ export async function runVisualOrchestration(
   const peerNames = (cli: CLIConfig) => clis.filter(c => c.id !== cli.id).map(c => c.name);
 
   const p2Files = clis.map(cli => {
+    const doneMarker = `${cli.id.toUpperCase()}_P2_DONE`;
     const f = path.join(sessionDir, `${cli.id}_p2.txt`);
     fs.writeFileSync(f, buildPhase2Prompt(
-      cli, brief, projectDir, bridge.path,
+      cli, brief, projectDir, signalCh.signalCmdFor(doneMarker),
       peerNames(cli), guidanceMap[cli.id] ?? ''
     ));
     return f;
@@ -162,13 +175,13 @@ export async function runVisualOrchestration(
 
   relaunchPhase({
     clis, promptFiles: p2Files, bridgePath: bridge.path,
-    phase: 2, projectDir, sessionDir,
+    phase: 2, projectDir, sessionDir, signalingChannel: signalCh,
   });
 
   const p2Markers = clis.map(c => `${c.id.toUpperCase()}_P2_DONE`);
   const p2Spinner = ora('Phase 2 review & gap-fill...').start();
-  const p2Done = await waitForMarkers(
-    bridge.path, p2Markers, 15 * 60 * 1000,
+  const p2Done = await signalCh.waitAll(
+    p2Markers, 15 * 60 * 1000,
     (found, total) => { progressLine(found, total, clis); }
   );
   process.stdout.write('\n');
@@ -176,6 +189,8 @@ export async function runVisualOrchestration(
   p2Done
     ? p2Spinner.succeed(chalk.green('Phase 2 complete'))
     : p2Spinner.warn(chalk.yellow('Phase 2 timed out'));
+
+  signalCh.teardown();
 
   // ── Session summary ───────────────────────────────────────────────────────
   const sessionFile = path.join(sessionDir, 'session.md');

@@ -27,6 +27,9 @@ export interface ConnectionMethod {
   icon: string;
   description: string;
   implemented: boolean;
+  speedBar?: string;   // ████████░░░░ style
+  speedLabel?: string; // 'BLAZING' | 'VERY FAST' | 'FAST' | 'MEDIUM'
+  badge?: string;      // '⚡ FASTEST'
 }
 
 export interface Score {
