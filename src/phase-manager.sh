@@ -318,8 +318,15 @@ trigger_rescue() {
   done
 
   stop_spinner
-  event "$RED" "🆘" "RESCUE" "Agent ${failed_id} failed. Dispatching helpers: ${helpers}"
-  
+  # Extract a meaningful error description from the log
+  local fail_reason
+  fail_reason=$(tail -n 40 "${SESSION_DIR}/${failed_id}_p${CUR_PHASE}.log" 2>/dev/null \
+    | LC_ALL=C grep -i "error\|failed\|cannot\|exception\|blocked" \
+    | LC_ALL=C grep -v '^[[:space:]]*$' | tail -n 3 | tr '\n' ' ' | cut -c1-120)
+  [ -z "$fail_reason" ] && fail_reason="Unknown error — check the live stream for details"
+  event "$RED" "🆘" "RESCUE" "${failed_id} failed: ${fail_reason}"
+  event "$RED" "🆘" "RESCUE" "Dispatching helpers: ${helpers}"
+
   local log_snippet; log_snippet=$(tail -n 25 "${SESSION_DIR}/${failed_id}_p${CUR_PHASE}.log" 2>/dev/null | LC_ALL=C sed 's/"/\\"/g')
   
   for helper in $helpers; do
@@ -498,8 +505,39 @@ wait_phase() {
       # ── ERROR DETECTION & RESCUE ──────────────────────────────────────────
       local fail_marker="${upper}_P${phase}_FAILED"
       if grep -q "$fail_marker" "$BRIDGE" 2>/dev/null; then
+        local fail_log="${SESSION_DIR}/${id}_p${phase}.log"
+        local col; col=$(cli_col "$id")
+        local name; name=$(title_case "$id")
+
+        # Detect specific error type from log
+        if LC_ALL=C grep -qi "QUOTA_EXHAUSTED\|quota.*exhausted\|rate.limit\|code: 429\|exhausted your capacity" "$fail_log" 2>/dev/null; then
+          local quota_reset; quota_reset=$(LC_ALL=C grep -i "reset" "$fail_log" 2>/dev/null | tail -n 1 | LC_ALL=C grep -o 'reset.*' | cut -c1-60)
+          event_final "$RED" "✗" "${name}" "QUOTA EXHAUSTED${quota_reset:+ — $quota_reset}"
+          # Broadcast to all partner agents via MCP messages file
+          local mcp_dir="${SESSION_DIR}/mcp"
+          mkdir -p "$mcp_dir" 2>/dev/null
+          printf '{"from":"synapse","to":"all","content":"%s quota exhausted — it cannot continue. Take over its tasks if possible.","timestamp":"%s"}\n' \
+            "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${mcp_dir}/mcp_messages.jsonl" 2>/dev/null
+          # Inject done marker so phase can still complete without this agent
+          echo "${upper}_P${phase}_DONE" >> "$BRIDGE"
+          # Skip rescue for quota errors — helpers can't fix it
+          stall=0; continue 2
+        fi
+
+        if LC_ALL=C grep -qi "operation not permitted\|permission denied\|read.only\|cannot create\|cannot write" "$fail_log" 2>/dev/null; then
+          event_final "$RED" "✗" "${name}" "FILESYSTEM PERMISSION DENIED — grant Terminal Full Disk Access in System Preferences"
+          # Extract the actual error line
+          local perm_line; perm_line=$(LC_ALL=C grep -i "operation not permitted\|permission denied\|read.only" "$fail_log" 2>/dev/null | tail -n 1 | cut -c1-80)
+          event_final "$YELLOW" "  " "detail" "${perm_line}"
+          # Broadcast via MCP
+          local mcp_dir="${SESSION_DIR}/mcp"
+          mkdir -p "$mcp_dir" 2>/dev/null
+          printf '{"from":"synapse","to":"all","content":"%s blocked by filesystem permissions. Check System Preferences → Full Disk Access.","timestamp":"%s"}\n' \
+            "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${mcp_dir}/mcp_messages.jsonl" 2>/dev/null
+        fi
+
         trigger_rescue "$id"
-        
+
         # After rescue, RESTART original phase scripts for everyone
         event "$CYAN" "▶" "synapse" "Restarting Phase ${phase} for all agents..."
         for rid in $ids; do
@@ -510,7 +548,6 @@ wait_phase() {
           tmux send-keys -t "${TMUX_SESSION}:${r_pane}" "bash '${r_script}'" Enter 2>/dev/null || true
         done
         start_spinner
-        # Reset stall and keep waiting in the same phase
         stall=0; start=$(date +%s); continue 2
       fi
 
@@ -524,7 +561,18 @@ wait_phase() {
           eval "$key=1"
           local col; col=$(cli_col "$id")
           local name; name=$(title_case "$id")
-          event_final "$col" "✓" "${name}" "Phase ${phase} complete  (${elapsed}s)"
+          # Show authentic last words from the agent's log
+          local last_words
+          last_words=$(tail -n 30 "${SESSION_DIR}/${id}_p${phase}.log" 2>/dev/null \
+            | LC_ALL=C grep -v '^[[:space:]]*$' \
+            | LC_ALL=C grep -v '^==>' \
+            | LC_ALL=C grep -v '^[💎🌀☁]' \
+            | tail -n 2 | tr '\n' ' ' | LC_ALL=C tr -d '\r' | cut -c1-110)
+          if [ -n "$last_words" ]; then
+            event_final "$col" "✓" "${name}" "\"${last_words}\""
+          else
+            event_final "$col" "✓" "${name}" "Phase ${phase} complete  (${elapsed}s)"
+          fi
           start_spinner
         fi
       fi

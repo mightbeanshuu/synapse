@@ -7,8 +7,7 @@ import type { CLIConfig, ActiveCLIs } from './types';
 
 // ── Prompt builders ───────────────────────────────────────────────────────────
 
-function buildPhase1Prompt(cli: CLIConfig, brief: string, projectDir: string, bridgePath: string): string {
-  const doneMarker = `${cli.id.toUpperCase()}_P1_DONE`;
+function buildPhase1Prompt(cli: CLIConfig, brief: string, projectDir: string, _bridgePath: string): string {
   return `${cli.preamble}
 
 ---
@@ -19,12 +18,12 @@ ${brief}
 WORKING DIRECTORY: ${projectDir}
 
 ⚠ MANDATORY RULES:
-1. CREATE REAL FILES on disk using your tools — no code blocks in chat.
+1. CREATE REAL FILES on disk using your file tools — no code blocks in chat.
 2. Run package manager commands (npm init, npm install, etc.).
 3. Write COMPLETE, working code — no stubs, no TODOs.
 4. Verify with: npx tsc --noEmit, npm test, etc.
-5. When 100% done, run this EXACT command:
-   echo "${doneMarker}" >> "${bridgePath}"
+5. When 100% done, call the MCP tool: signal_done(phase=1, summary="one sentence of what you built")
+   Do NOT run any echo or shell command to signal completion — use the MCP tool only.
 
 Work in: ${projectDir}
 Start now.`;
@@ -54,8 +53,8 @@ PHASE 2 TASKS:
 2. From YOUR role's perspective (${cli.role}), identify: missing files, bugs, security holes, missing tests.
 3. Fix and ADD what's missing — create real files, edit existing ones.
 4. Run the full project end-to-end and verify it works.
-5. When 100% done, run this EXACT command:
-   echo "${doneMarker}" >> "${bridgePath}"
+5. When 100% done, call the MCP tool: signal_done(phase=2, summary="one sentence of what you reviewed/fixed")
+   Do NOT run any echo or shell command to signal completion — use the MCP tool only.
 
 Start reviewing and improving now.`;
 }

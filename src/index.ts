@@ -192,6 +192,25 @@ async function main(): Promise<void> {
   // ── Project directory ──────────────────────────────────────────────────────
   const projectDir = await resolveProjectDir();
 
+  // ── Pre-flight: verify write access ───────────────────────────────────────
+  const writeTest = path.join(projectDir, `.synapse-write-test-${Date.now()}`);
+  try {
+    fs.writeFileSync(writeTest, 'ok');
+    fs.unlinkSync(writeTest);
+  } catch {
+    console.log(chalk.red(`\n${T}✗  Cannot write to ${projectDir}`));
+    console.log(chalk.yellow(`${T}   This is a macOS permission issue — CLIs will fail to create files.`));
+    console.log(dim(`${T}   Fix → System Preferences → Privacy & Security → Full Disk Access → enable Terminal`));
+    console.log(dim(`${T}   Or pick a directory inside ~/Documents or ~/code instead of ~/Desktop\n`));
+    const { cont } = await inquirer.prompt<{ cont: boolean }>([{
+      type: 'confirm', name: 'cont',
+      message: `${T}Continue anyway?`,
+      default: false,
+    }]);
+    if (!cont) { console.log(dim('\nAborted.\n')); process.exit(0); }
+  }
+  console.log(chalk.green(`${T}✓ Write access confirmed\n`));
+
   // ── Connect spinner ────────────────────────────────────────────────────────
   const connectSpinner = ora({ text: dim('Wiring MCP bridge...'), spinner: 'dots' }).start();
   await new Promise(r => setTimeout(r, 500));
