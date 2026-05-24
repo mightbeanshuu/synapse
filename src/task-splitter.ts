@@ -1,4 +1,5 @@
 import { runCLI } from './runner';
+import type { ComplexityProfile } from './complexity';
 
 export interface TrackDecomposition {
   trackA: { label: string; scope: string };
@@ -6,12 +7,23 @@ export interface TrackDecomposition {
   interfacesHint: string;
 }
 
-function decompositionPrompt(brief: string): string {
+function decompositionPrompt(brief: string, complexity?: ComplexityProfile): string {
+  const complexitySection = complexity ? `
+COMPLEXITY LEVEL: ${complexity.label} — ${complexity.description}
+ALLOWED TECH STACK: ${complexity.techStack}
+
+IMPORTANT: The track split MUST respect the complexity constraints. For example:
+- Simple → Track A = all HTML/CSS/JS files, Track B = styling polish + testing (NO backend tracks)
+- Basic → Track A = minimal server + SQLite, Track B = frontend views
+- Medium → Track A = backend API + DB, Track B = frontend + auth integration
+- Advanced → Track A = backend services + infra, Track B = frontend + CI/CD
+` : '';
+
   return `You are a senior architect. Split this project brief into two PARALLEL workstreams that can be built simultaneously with minimal conflicts.
 
 PROJECT BRIEF:
 ${brief}
-
+${complexitySection}
 Output EXACTLY in this format — no intro, no fences:
 
 TRACK_A_LABEL: [short name, e.g. "Backend & API"]
@@ -46,9 +58,12 @@ const FALLBACK: TrackDecomposition = {
   interfacesHint: 'REST API endpoints, TypeScript types in src/types.ts, shared env vars in .env.example',
 };
 
-export async function decomposeToTracks(brief: string): Promise<TrackDecomposition> {
+export async function decomposeToTracks(
+  brief: string,
+  complexity?: ComplexityProfile
+): Promise<TrackDecomposition> {
   try {
-    const result = await runCLI('claude', 'Claude (Planner)', decompositionPrompt(brief), '/tmp');
+    const result = await runCLI('claude', 'Claude (Planner)', decompositionPrompt(brief, complexity), '/tmp');
     return parse(result.output) ?? FALLBACK;
   } catch {
     return FALLBACK;

@@ -76,16 +76,22 @@ function writeRunScript(
   logFile: string,
   bridgePath: string,
   phase: number,
-  sessionDir: string
+  sessionDir: string,
+  safeMode = false
 ): void {
   let runCmd: string;
   const symbolPrefix = `${cli.symbol} `;
   if (cli.id === 'gemini') {
-    runCmd = `gemini --yolo -p "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
+    // Safe mode: remove --yolo so Gemini asks before actions
+    const yolo = safeMode ? '' : '--yolo';
+    runCmd = `gemini ${yolo} -p "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else if (cli.id === 'codex') {
-    runCmd = `codex --ask-for-approval never exec "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
+    const approval = safeMode ? '--ask-for-approval always' : '--ask-for-approval never';
+    runCmd = `codex ${approval} exec "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else {
-    runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
+    // Safe mode: no --dangerously-skip-permissions, Claude will ask in its tmux pane
+    const perms = safeMode ? '' : '--dangerously-skip-permissions';
+    runCmd = `claude ${perms} --print "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   }
 
   const guidanceBlock = phase === 2 ? `
@@ -129,6 +135,7 @@ export interface LaunchOpts {
   bridgePath: string;
   projectDir: string;
   sessionDir: string;
+  safeMode?: boolean;
 }
 
 // ── Write all run scripts for a phase ────────────────────────────────────────
@@ -139,7 +146,7 @@ export function writePhaseScripts(opts: LaunchOpts, phase: number, promptFiles: 
     const doneMarker = `${cli.id.toUpperCase()}_P${phase}_DONE`;
     const failMarker = `${cli.id.toUpperCase()}_P${phase}_FAILED`;
     writeRunScript(scriptPath, cli, promptFiles[i], doneMarker, failMarker,
-      opts.projectDir, logFile, opts.bridgePath, phase, opts.sessionDir);
+      opts.projectDir, logFile, opts.bridgePath, phase, opts.sessionDir, opts.safeMode);
   });
 }
 
@@ -161,7 +168,7 @@ export function launchDashboard(opts: LaunchOpts): void {
     const logFile    = path.join(sessionDir, `${cli.id}_p1.log`);
     const doneMarker = `${cli.id.toUpperCase()}_P1_DONE`;
     const failMarker = `${cli.id.toUpperCase()}_P1_FAILED`;
-    writeRunScript(scriptPath, cli, promptFiles[i], doneMarker, failMarker, projectDir, logFile, bridgePath, 1, sessionDir);
+    writeRunScript(scriptPath, cli, promptFiles[i], doneMarker, failMarker, projectDir, logFile, bridgePath, 1, sessionDir, opts.safeMode);
     setPaneTitle(`${SESSION}:${pane}`, `${cli.name}  ·  Phase 1`);
     tmux(`send-keys -t "${SESSION}:${pane}" "bash '${scriptPath}'" Enter`);
   });
@@ -185,10 +192,11 @@ export function launchDashboard(opts: LaunchOpts): void {
   const interactiveStreamSh = path.join(__dirname, 'interactive-stream.sh');
   const pipePath = path.join(sessionDir, 'commands.pipe');
   
+  const safeModeFlag = opts.safeMode ? '1' : '0';
   clis.forEach((cli) => {
     const p1 = path.join(sessionDir, `${cli.id}_p1.log`);
     const p2 = path.join(sessionDir, `${cli.id}_p2.log`);
-    const cmd = `bash '${interactiveStreamSh}' '${cli.id}' '${cli.symbol}' '${p1}' '${p2}' '${pipePath}'`;
+    const cmd = `bash '${interactiveStreamSh}' '${cli.id}' '${cli.symbol}' '${p1}' '${p2}' '${pipePath}' '${safeModeFlag}'`;
     openTerminalWindow(cmd);
   });
 }

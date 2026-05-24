@@ -1,7 +1,7 @@
 #!/bin/bash
-# SYNAPSE  ·  Agent Stream  v2.0
-# Args: <cli_id> <symbol> <log_p1> <log_p2> <pipe_path>
-CLI_ID="$1"; SYMBOL="$2"; LOG_P1="$3"; LOG_P2="$4"; PIPE="$5"
+# SYNAPSE  ·  Agent Stream  v2.1
+# Args: <cli_id> <symbol> <log_p1> <log_p2> <pipe_path> [safe_mode:0|1]
+CLI_ID="$1"; SYMBOL="$2"; LOG_P1="$3"; LOG_P2="$4"; PIPE="$5"; SAFE_MODE="${6:-0}"
 
 # ── ANSI ─────────────────────────────────────────────────────────────────────
 R=$'\033[0m'; BOLD=$'\033[1m'; DIM=$'\033[2m'
@@ -42,7 +42,9 @@ print_header() {
   local b; b=$(wbar)
   clear
   printf "\n${A_CLR}${BOLD}${b}${R}\n\n"
-  printf "  ${A_CLR}${BOLD}${SYMBOL}  SYNAPSE  ›  ${CLI_ID^^}${R}   ${DIM}${ROLE}  ·  Phase 1 active  ·  $(date '+%H:%M:%S')${R}\n"
+  local safe_tag=""
+  [ "$SAFE_MODE" = "1" ] && safe_tag="${YELLOW}  🛡 SAFE MODE${R}"
+  printf "  ${A_CLR}${BOLD}${SYMBOL}  SYNAPSE  ›  ${CLI_ID^^}${R}   ${DIM}${ROLE}  ·  Phase 1 active  ·  $(date '+%H:%M:%S')${R}${safe_tag}\n"
   printf "  ${DIM}session: $(basename "$SESSION_DIR")  ·  log: $(basename "$LOG_P1")${R}\n\n"
   printf "${A_CLR}${BOLD}${b}${R}\n\n"
   printf "  ${DIM}Streaming live output — type below to steer this agent${R}\n\n"
@@ -138,6 +140,28 @@ colorize() {
 ) &
 WATCHER_PID=$!
 
+# ── Danger monitor (safe mode only) ──────────────────────────────────────────
+DANGER_PID=""
+if [ "$SAFE_MODE" = "1" ]; then
+  (
+    SEEN=""
+    while true; do
+      MATCH=$(LC_ALL=C grep -oE "(rm -rf [^;&\"']+|sudo [^ ]+|curl [^|]+ *\| *(bash|sh)|wget [^|]+ *\| *(bash|sh)|chmod [0-9]{3,4} /|mkfs\.[^ ]+)" \
+              "$LOG_P1" "$LOG_P2" 2>/dev/null | tail -1)
+      if [ -n "$MATCH" ] && [ "$MATCH" != "$SEEN" ]; then
+        SEEN="$MATCH"
+        printf "\n${RED}${BOLD}  ╔══════════════════════════════════════════╗${R}\n"
+        printf "${RED}${BOLD}  ║  ⚠  DANGEROUS COMMAND DETECTED           ║${R}\n"
+        printf "${RED}${BOLD}  ║  %-44s  ║${R}\n" "${MATCH:0:44}"
+        printf "${RED}${BOLD}  ╚══════════════════════════════════════════╝${R}\n"
+        printf "  ${YELLOW}  Type: /priority stop — dangerous command detected${R}\n\n"
+      fi
+      sleep 6
+    done
+  ) &
+  DANGER_PID=$!
+fi
+
 # ── Wait for command pipe to be ready (phase-manager creates it) ──────────────
 PIPE_READY=0
 for _i in $(seq 1 20); do
@@ -147,7 +171,7 @@ done
 
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 cleanup() {
-  kill "$WATCHER_PID" "$STREAM_PID" 2>/dev/null
+  kill "$WATCHER_PID" "$STREAM_PID" "$DANGER_PID" 2>/dev/null
   exit 0
 }
 trap cleanup EXIT INT TERM

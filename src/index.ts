@@ -12,7 +12,24 @@ import { assignRolesFromAnalysis, assignRolesManually, assignRolesForTracks, get
 import { decomposeToTracks } from './task-splitter';
 import { runVisualOrchestration } from './visual-orchestrator';
 import { tmuxAvailable } from './launcher';
+import { pickComplexity, runComplexityQA, buildConstraintBlock } from './complexity';
 import type { CLIId } from './types';
+
+// ── Session cleanup (remove output dirs older than 7 days) ────────────────────
+function cleanOldSessions(): void {
+  const outputDir = path.join(__dirname, '..', 'output');
+  if (!fs.existsSync(outputDir)) return;
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  try {
+    for (const entry of fs.readdirSync(outputDir)) {
+      const full = path.join(outputDir, entry);
+      const stat = fs.statSync(full);
+      if (stat.isDirectory() && stat.mtimeMs < cutoff) {
+        fs.rmSync(full, { recursive: true, force: true });
+      }
+    }
+  } catch { /* best effort */ }
+}
 
 // ── CLI availability ──────────────────────────────────────────────────────────
 function cliAvailable(bin: string): boolean {
@@ -98,6 +115,7 @@ async function resolveProjectDir(): Promise<string> {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
+  cleanOldSessions();
   await showBanner();
 
   // ── Brief ──────────────────────────────────────────────────────────────────
@@ -111,6 +129,19 @@ async function main(): Promise<void> {
     brief = b.trim();
   }
   console.log();
+
+  // ── Complexity level ───────────────────────────────────────────────────────
+  const complexityProfile = await pickComplexity();
+  console.log(chalk.dim(`\n  Stack: ${complexityProfile.techStack}\n`));
+
+  // ── 2-question Q&A to sharpen the brief ───────────────────────────────────
+  const qaExtras = await runComplexityQA(complexityProfile);
+  if (qaExtras) {
+    brief = brief + qaExtras;
+    console.log(chalk.dim('\n  Brief refined with your preferences.\n'));
+  } else {
+    console.log();
+  }
 
   // ── CLI selection ──────────────────────────────────────────────────────────
   const available = [
@@ -173,7 +204,7 @@ async function main(): Promise<void> {
   if (execMode === 'parallel-tracks') {
     // Parallel tracks: decompose brief, assign track preambles
     const trackSpinner = ora('Decomposing project into parallel tracks...').start();
-    const decomp = await decomposeToTracks(brief);
+    const decomp = await decomposeToTracks(brief, complexityProfile);
     trackSpinner.succeed(chalk.green('Track decomposition complete'));
 
     console.log('\n' + chalk.bold('  Parallel Track Assignment\n'));
@@ -263,6 +294,12 @@ async function main(): Promise<void> {
     console.log(chalk.dim(`\n  ${getRoleReason(analysis)}\n`));
   }
 
+  // ── Inject complexity constraints into every CLI's preamble ──────────────────
+  const constraintBlock = buildConstraintBlock(complexityProfile);
+  for (const cli of activeCLIs.configs) {
+    cli.preamble = constraintBlock + '\n' + cli.preamble;
+  }
+
   // ── Mode info ──────────────────────────────────────────────────────────────
   const hasTmux = tmuxAvailable();
   if (!hasTmux) {
@@ -274,6 +311,13 @@ async function main(): Promise<void> {
     console.log(`  Mode: ${modeLabel}\n`);
   }
 
+  // ── Safe mode toggle ───────────────────────────────────────────────────────
+  const { safeMode } = await inquirer.prompt<{ safeMode: boolean }>([{
+    type: 'confirm', name: 'safeMode',
+    message: chalk.white('Enable safe mode?') + chalk.dim(' (monitors for dangerous commands — slower)'),
+    default: false,
+  }]);
+
   // ── Confirm ────────────────────────────────────────────────────────────────
   const { go } = await inquirer.prompt<{ go: boolean }>([{
     type: 'confirm', name: 'go',
@@ -284,7 +328,7 @@ async function main(): Promise<void> {
   console.log();
 
   // ── Orchestrate ────────────────────────────────────────────────────────────
-  await runVisualOrchestration(brief, effectiveMethod, activeCLIs, projectDir);
+  await runVisualOrchestration(brief, effectiveMethod, activeCLIs, projectDir, safeMode);
 }
 
 main().catch(e => {

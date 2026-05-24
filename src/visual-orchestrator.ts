@@ -66,7 +66,8 @@ export async function runVisualOrchestration(
   brief: string,
   connectionMethod: string,
   activeCLIs: ActiveCLIs,
-  projectDir: string
+  projectDir: string,
+  safeMode = false
 ): Promise<void> {
   const { configs: clis } = activeCLIs;
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -95,7 +96,7 @@ export async function runVisualOrchestration(
     return f;
   });
 
-  const opts = { clis, promptFiles: p1Files, bridgePath: bridge.path, projectDir, sessionDir };
+  const opts = { clis, promptFiles: p1Files, bridgePath: bridge.path, projectDir, sessionDir, safeMode };
 
   // Pre-write P2 run scripts (phase-manager.sh will execute them after guidance)
   writePhaseScripts(opts, 2, p2Files);

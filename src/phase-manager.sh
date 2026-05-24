@@ -605,10 +605,64 @@ wait_phase 2 "$P2_TIMEOUT" $ALL_IDS
 stop_spinner
 printf "\n"
 divider
-printf "${GREEN}${BOLD}  ✓  SESSION COMPLETE${R}\n"
+printf "${GREEN}${BOLD}  ✓  SESSION COMPLETE${R}  ${DIM}$(elapsed) total${R}\n"
 divider
 printf "  ${DIM}Project : ${PROJECT_DIR}${R}\n"
 printf "  ${DIM}Session : ${SESSION_DIR}${R}\n"
+printf "\n"
+
+# ── Clean up generated helper files inside the project ────────────────────────
+# Remove synapse-internal markers that leaked into the project dir
+for _deadfile in "$PROJECT_DIR/SYNAPSE_DONE" "$PROJECT_DIR/.synapse_bridge"; do
+  [ -f "$_deadfile" ] && rm -f "$_deadfile"
+done
+
+# ── Launch & test ──────────────────────────────────────────────────────────────
+divider
+printf "${CYAN}${BOLD}  ▶  Launch Project?${R}\n"
+divider
+printf "\n"
+if [ -f "$PROJECT_DIR/package.json" ]; then
+  _start_cmd=$(grep -o '"start"[[:space:]]*:[[:space:]]*"[^"]*"' "$PROJECT_DIR/package.json" 2>/dev/null \
+    | sed 's/"start"[[:space:]]*:[[:space:]]*"//;s/"//')
+  _dev_cmd=$(grep -o '"dev"[[:space:]]*:[[:space:]]*"[^"]*"' "$PROJECT_DIR/package.json" 2>/dev/null \
+    | sed 's/"dev"[[:space:]]*:[[:space:]]*"//;s/"//')
+  if [ -n "$_start_cmd" ]; then
+    _launch="npm start"
+  elif [ -n "$_dev_cmd" ]; then
+    _launch="npm run dev"
+  else
+    _launch="node index.js"
+  fi
+  printf "  ${CYAN}Detected: Node.js project${R}  ${DIM}→  ${_launch}${R}\n"
+elif [ -f "$PROJECT_DIR/index.html" ] && ! [ -f "$PROJECT_DIR/package.json" ]; then
+  _launch="open"
+  printf "  ${CYAN}Detected: Static HTML${R}  ${DIM}→  open index.html in browser${R}\n"
+elif [ -f "$PROJECT_DIR/main.py" ] || [ -f "$PROJECT_DIR/app.py" ]; then
+  _pyfile="main.py"; [ -f "$PROJECT_DIR/app.py" ] && _pyfile="app.py"
+  _launch="python ${_pyfile}"
+  printf "  ${CYAN}Detected: Python${R}  ${DIM}→  python ${_pyfile}${R}\n"
+elif [ -f "$PROJECT_DIR/go.mod" ]; then
+  _launch="go run ."
+  printf "  ${CYAN}Detected: Go${R}  ${DIM}→  go run .${R}\n"
+else
+  _launch=""
+  printf "  ${DIM}Could not auto-detect project type.${R}\n"
+fi
+
+printf "\n  Launch now? [y/N]: "
+IFS= read -r _launch_choice
+if [ "$_launch_choice" = "y" ] || [ "$_launch_choice" = "Y" ]; then
+  if [ "$_launch" = "open" ]; then
+    open "$PROJECT_DIR/index.html" 2>/dev/null && \
+      printf "  ${GREEN}✓  Opened in browser${R}\n"
+  elif [ -n "$_launch" ]; then
+    printf "  ${GREEN}▶  Starting: ${_launch}${R}\n"
+    osascript -e "tell application \"Terminal\" to do script \"cd '${PROJECT_DIR}' && ${_launch}\"" 2>/dev/null || \
+      printf "  ${YELLOW}  Run manually: cd '${PROJECT_DIR}' && ${_launch}${R}\n"
+  fi
+fi
+
 printf "\n"
 printf "${DIM}  Press Enter to close this window...${R}"
 IFS= read -r _
