@@ -54,7 +54,7 @@ idx_for() {
 run_cmd_for() {
   case "$1" in
     gemini) echo 'gemini --yolo -p "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/💎 /" | tee -a "$LOGFILE"' ;;
-    codex)  echo 'codex exec --ask-for-approval never "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/🌀 /" | tee -a "$LOGFILE"' ;;
+    codex)  echo 'codex --ask-for-approval never exec "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/🌀 /" | tee -a "$LOGFILE"' ;;
     *)      echo 'claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/☁️ /" | tee -a "$LOGFILE"' ;;
   esac
 }
@@ -238,8 +238,18 @@ cd '${PROJECT_DIR}'
 BASE_PROMPT=\$(cat '${prompt_file}')
 PROMPT="\$BASE_PROMPT
 
-PRIORITY USER REQUEST (respond first, then continue implementation):
-${message}
+══════════════════════════════════════════════════════
+INTERACTIVE USER CHAT MESSAGE
+══════════════════════════════════════════════════════
+The user just sent you this message through the terminal:
+\"${message}\"
+
+YOUR INSTRUCTIONS:
+1. ACKNOWLEDGE this message immediately in your response.
+2. If it's a question, answer it.
+3. If it's a request for a change, apply it to the codebase.
+4. Then continue with your original implementation plan.
+══════════════════════════════════════════════════════
 "
 LOGFILE='${log_file}'
 ${cmd}
@@ -278,7 +288,7 @@ PROMPT="════════════════════════
 RESCUE MISSION — YOUR PARTNER ${failed_id} FAILED
 ══════════════════════════════════════════════════════
 
-YOUR PARTNER ENCOUNTERED THIS ERROR:
+YOUR PARTNER $(agent_symbol ${failed_id}) ${failed_id} ENCOUNTERED THIS ERROR:
 ${log_snippet}
 
 YOUR TASK:
@@ -367,7 +377,7 @@ poll_command() {
   fi
 
   # 2. Read from command pipe (Interactive Streams)
-  if read -u 3 -r -t 0.1 cmd; then
+  if read -u 3 -r -t 1 cmd; then
     [ -z "$cmd" ] && return
     # Log that the command came from a chat window
     event "$BLUE" "💬" "chat" "Incoming instruction from terminal..."

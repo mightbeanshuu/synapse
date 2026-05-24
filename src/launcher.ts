@@ -83,7 +83,7 @@ function writeRunScript(
   if (cli.id === 'gemini') {
     runCmd = `gemini --yolo -p "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else if (cli.id === 'codex') {
-    runCmd = `codex exec --ask-for-approval never "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
+    runCmd = `codex --ask-for-approval never exec "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else {
     runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   }
