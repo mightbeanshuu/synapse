@@ -19,6 +19,11 @@ function tmux(cmd: string): void {
   execSync(`tmux ${cmd}`, { stdio: 'ignore' });
 }
 
+function openTerminalWindow(cmd: string): void {
+  const escaped = cmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  execSync(`osascript -e 'tell application "Terminal" to do script "${escaped}"'`);
+}
+
 function applyTheme(projectName: string): void {
   const set = (opt: string, val: string) => tmux(`set -t ${SESSION} ${opt} "${val}"`);
   set('status', 'on');
@@ -74,7 +79,7 @@ function writeRunScript(
   if (cli.id === 'gemini') {
     runCmd = `gemini --yolo -p "$PROMPT" 2>&1 | tee -a "${logFile}"`;
   } else if (cli.id === 'codex') {
-    runCmd = `codex --approval-mode full-auto "$PROMPT" 2>&1 | tee -a "${logFile}"`;
+    runCmd = `codex "$PROMPT" 2>&1 | tee -a "${logFile}"`;
   } else {
     runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | tee -a "${logFile}"`;
   }
@@ -149,7 +154,7 @@ export function launchDashboard(opts: LaunchOpts): void {
     tmux(`send-keys -t "${SESSION}:${pane}" "bash '${scriptPath}'" Enter`);
   });
 
-  // Write a feed launcher script (avoids osascript quoting hell)
+  // Write a feed launcher script (command center + summary)
   const cliIds     = clis.map(c => c.id).join(' ');
   const feedScript = path.join(sessionDir, '_feed.sh');
   fs.writeFileSync(feedScript, [
@@ -161,8 +166,16 @@ export function launchDashboard(opts: LaunchOpts): void {
     `  '${SESSION}' ${clis.length} ${cliIds}`,
   ].join('\n'), { mode: 0o755 });
 
-  // Open activity feed in a dedicated separate Terminal.app window
-  execSync(`osascript -e 'tell application "Terminal" to do script "bash ${feedScript}"'`);
+  // Open command center in dedicated Terminal.app window
+  openTerminalWindow(`bash '${feedScript}'`);
+
+  // Open one live terminal window per selected CLI with rolling logs.
+  clis.forEach((cli) => {
+    const p1 = path.join(sessionDir, `${cli.id}_p1.log`);
+    const p2 = path.join(sessionDir, `${cli.id}_p2.log`);
+    const watch = `printf '\\n== ${cli.name} live stream ==\\n'; touch '${p1}' '${p2}'; tail -n 40 -F '${p1}' '${p2}'`;
+    openTerminalWindow(watch);
+  });
 }
 
 // ── Attach tmux to current terminal (blocks until phase-manager detaches) ────
