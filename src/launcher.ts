@@ -1,8 +1,10 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import type { CLIConfig } from './types';
 
 const SESSION = 'synapse';
+const MONITOR_SH = path.join(__dirname, 'monitor.sh');
 
 export function tmuxAvailable(): boolean {
   try { execSync('which tmux', { stdio: 'ignore' }); return true; }
@@ -10,119 +12,195 @@ export function tmuxAvailable(): boolean {
 }
 
 function killSession(): void {
-  try { execSync(`tmux kill-session -t ${SESSION}`, { stdio: 'ignore' }); } catch {}
+  try { execSync(`tmux kill-session -t ${SESSION} 2>/dev/null`, { stdio: 'ignore' }); } catch {}
 }
 
-// Write a shell script that runs a CLI agentic session and signals done
+function tmux(cmd: string): void {
+  execSync(`tmux ${cmd}`, { stdio: 'ignore' });
+}
+
+// ── Style the session (status bar + pane borders) ───────────────────────────
+function applyTheme(projectName: string): void {
+  const setGlobal = (opt: string, val: string) =>
+    tmux(`set -t ${SESSION} ${opt} "${val}"`);
+
+  setGlobal('status', 'on');
+  setGlobal('status-interval', '5');
+  setGlobal('status-style', 'bg=colour234 fg=colour250');
+  setGlobal('status-left', '#[fg=colour39,bold] ⬡ SYNAPSE  #[fg=colour240,nobold]│  ');
+  setGlobal('status-right', `#[fg=colour240]│  ${projectName}  │  #[fg=colour39]%(date "+%H:%M")  `);
+  setGlobal('status-left-length', '30');
+  setGlobal('status-right-length', '50');
+
+  setGlobal('pane-border-style', 'fg=colour237');
+  setGlobal('pane-active-border-style', 'fg=colour39');
+  setGlobal('pane-border-status', 'top');
+  setGlobal('pane-border-format',
+    '#{?pane_active,#[fg=colour39 bold],#[fg=colour242]} #{pane_title}  ');
+
+  setGlobal('window-style', 'bg=colour232');
+  setGlobal('window-active-style', 'bg=colour232');
+}
+
+// ── Write a run script for one CLI ──────────────────────────────────────────
 function writeRunScript(
   scriptPath: string,
-  binary: string,
+  cli: CLIConfig,
   promptFile: string,
   bridgePath: string,
   doneMarker: string,
   projectDir: string,
-  label: string
+  logFile: string
 ): void {
-  const labelBar = `echo "" && echo "┌─────────────────────────────────────────────┐" && echo "│  ${label.padEnd(45)}│" && echo "└─────────────────────────────────────────────┘" && echo ""`;
+  let runCmd: string;
+  if (cli.id === 'gemini') {
+    runCmd = `gemini --yolo -p "$PROMPT" 2>&1 | tee -a "${logFile}"`;
+  } else if (cli.id === 'codex') {
+    runCmd = `codex --approval-mode full-auto "$PROMPT" 2>&1 | tee -a "${logFile}"`;
+  } else {
+    // claude — --print streams all tool calls visually, --dangerously-skip-permissions auto-approves
+    runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | tee -a "${logFile}"`;
+  }
 
-  const script =
-    binary === 'gemini'
-      ? `#!/bin/bash
+  const label = cli.name.padEnd(46);
+  const script = `#!/bin/bash
 cd '${projectDir}'
-${labelBar}
 PROMPT=$(cat '${promptFile}')
-gemini --yolo -p "$PROMPT"
-echo "${doneMarker}" >> '${bridgePath}'
-`
-      : `#!/bin/bash
-cd '${projectDir}'
-${labelBar}
-PROMPT=$(cat '${promptFile}')
-claude --dangerously-skip-permissions --print "$PROMPT"
+printf '\\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m\\n'
+printf '\\033[1m  ${label}\\033[0m\\n'
+printf '\\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m\\n'
+echo ''
+${runCmd}
+echo ''
+printf '\\033[32m  ✓ ${cli.name} done — writing completion marker\\033[0m\\n'
 echo "${doneMarker}" >> '${bridgePath}'
 `;
 
   fs.writeFileSync(scriptPath, script, { mode: 0o755 });
 }
 
-export interface LaunchOpts {
-  projectDir: string;
-  claudePromptFile: string;
-  geminiPromptFile: string;
-  bridgePath: string;
-  phase: number;
-  architectName: string;
-  executorName: string;
+// ── Create tmux layout depending on CLI count ─────────────────────────────
+function buildLayout(cliCount: number): void {
+  // Step 1: full pane → split bottom 25% for activity feed
+  tmux(`split-window -v -t "${SESSION}:0.0" -p 25`);
+
+  if (cliCount === 2) {
+    // Split top pane 50/50
+    tmux(`split-window -h -t "${SESSION}:0.0"`);
+    // Pane order: 0.0 = top-left (CLI1), 0.1 = bottom (monitor), 0.2 = top-right (CLI2)
+  } else {
+    // Split top pane into thirds: first split at 66%, then split left at 50%
+    tmux(`split-window -h -t "${SESSION}:0.0" -p 66`);
+    tmux(`split-window -h -t "${SESSION}:0.0"`);
+    // Pane order: 0.0 = top-left (CLI1), 0.1 = bottom (monitor), 0.2 = top-mid (CLI2), 0.3 = top-right (CLI3)
+  }
 }
 
-export function launchVisual(opts: LaunchOpts): void {
-  const { projectDir, claudePromptFile, geminiPromptFile, bridgePath, phase, architectName, executorName } = opts;
+function setPaneTitle(pane: string, title: string): void {
+  try { tmux(`select-pane -t "${pane}" -T "${title}"`); } catch {}
+}
+
+// ── Map pane indices per CLI count ───────────────────────────────────────────
+// With 2 CLIs: panes 0,2 are CLIs; pane 1 is monitor
+// With 3 CLIs: panes 0,2,3 are CLIs; pane 1 is monitor
+function cliPanes(cliCount: number): string[] {
+  return cliCount === 2 ? ['0.0', '0.2'] : ['0.0', '0.2', '0.3'];
+}
+
+const MONITOR_PANE = '0.1';
+
+// ── Public launch ────────────────────────────────────────────────────────────
+export interface LaunchOpts {
+  clis: CLIConfig[];
+  promptFiles: string[];      // one per CLI, same order as clis
+  bridgePath: string;
+  phase: number;
+  projectDir: string;
+  sessionDir: string;
+}
+
+export function launchDashboard(opts: LaunchOpts): void {
+  const { clis, promptFiles, bridgePath, phase, projectDir, sessionDir } = opts;
 
   killSession();
+  tmux(`new-session -d -s ${SESSION} -x 260 -y 60`);
 
-  const scriptDir = path.dirname(bridgePath);
-  const claudeScript = path.join(scriptDir, `claude_p${phase}.sh`);
-  const geminiScript = path.join(scriptDir, `gemini_p${phase}.sh`);
+  const projectName = path.basename(projectDir);
+  applyTheme(projectName);
+  buildLayout(clis.length);
 
-  writeRunScript(claudeScript, 'claude', claudePromptFile, bridgePath, `CLAUDE_P${phase}_DONE`, projectDir,
-    `${architectName}  ·  Phase ${phase}`);
-  writeRunScript(geminiScript, 'gemini', geminiPromptFile, bridgePath, `GEMINI_P${phase}_DONE`, projectDir,
-    `${executorName}  ·  Phase ${phase}`);
+  const panes = cliPanes(clis.length);
 
-  // Create session
-  execSync(`tmux new-session -d -s ${SESSION} -x 240 -y 55`);
+  // Launch each CLI in its pane
+  clis.forEach((cli, i) => {
+    const pane = panes[i];
+    const scriptPath = path.join(sessionDir, `${cli.id}_p${phase}.sh`);
+    const logFile = path.join(sessionDir, `${cli.id}_p${phase}.log`);
+    const doneMarker = `${cli.id.toUpperCase()}_P${phase}_DONE`;
 
-  // Split right for Gemini (50/50)
-  execSync(`tmux split-window -h -t "${SESSION}:0.0"`);
+    writeRunScript(scriptPath, cli, promptFiles[i], bridgePath, doneMarker, projectDir, logFile);
+    setPaneTitle(`${SESSION}:${pane}`, `${cli.name}  ·  Phase ${phase}`);
+    tmux(`send-keys -t "${SESSION}:${pane}" "bash '${scriptPath}'" Enter`);
+  });
 
-  // Split bottom-left for bridge log (25% height)
-  execSync(`tmux split-window -v -t "${SESSION}:0.0" -p 25`);
-
-  // Pane 0 (top-left): Claude
-  execSync(`tmux send-keys -t "${SESSION}:0.0" "bash '${claudeScript}'" Enter`);
-
-  // Pane 1 (right): Gemini
-  execSync(`tmux send-keys -t "${SESSION}:0.1" "bash '${geminiScript}'" Enter`);
-
-  // Pane 2 (bottom-left): Bridge log
-  execSync(`tmux send-keys -t "${SESSION}:0.2" "printf '\\033[36m=== Synapse Bridge Log ===\\033[0m\\n' && tail -f '${bridgePath}'" Enter`);
+  // Activity monitor in bottom pane
+  const cliNames = clis.map(c => c.id).join(' ');
+  setPaneTitle(`${SESSION}:${MONITOR_PANE}`, '⬡  Activity Feed  —  real-time');
+  tmux(`send-keys -t "${SESSION}:${MONITOR_PANE}" "bash '${MONITOR_SH}' '${bridgePath}' '${projectDir}' ${cliNames}" Enter`);
 
   // Open in a new Terminal.app window
   execSync(`osascript -e 'tell application "Terminal" to do script "tmux attach -t ${SESSION}"'`);
 }
 
-// Reuse the same session for a new phase (kill old panes, rerun scripts)
+// ── Reuse existing session for next phase ────────────────────────────────────
 export function relaunchPhase(opts: LaunchOpts): void {
-  const { projectDir, claudePromptFile, geminiPromptFile, bridgePath, phase, architectName, executorName } = opts;
+  const { clis, promptFiles, bridgePath, phase, projectDir, sessionDir } = opts;
+  const panes = cliPanes(clis.length);
 
-  const scriptDir = path.dirname(bridgePath);
-  const claudeScript = path.join(scriptDir, `claude_p${phase}.sh`);
-  const geminiScript = path.join(scriptDir, `gemini_p${phase}.sh`);
+  clis.forEach((cli, i) => {
+    const pane = panes[i];
+    const scriptPath = path.join(sessionDir, `${cli.id}_p${phase}.sh`);
+    const logFile = path.join(sessionDir, `${cli.id}_p${phase}.log`);
+    const doneMarker = `${cli.id.toUpperCase()}_P${phase}_DONE`;
 
-  writeRunScript(claudeScript, 'claude', claudePromptFile, bridgePath, `CLAUDE_P${phase}_DONE`, projectDir,
-    `${architectName}  ·  Phase ${phase}`);
-  writeRunScript(geminiScript, 'gemini', geminiPromptFile, bridgePath, `GEMINI_P${phase}_DONE`, projectDir,
-    `${executorName}  ·  Phase ${phase}`);
+    writeRunScript(scriptPath, cli, promptFiles[i], bridgePath, doneMarker, projectDir, logFile);
 
-  // Send new commands to existing panes (CLIs have exited after Phase 1)
-  try {
-    execSync(`tmux send-keys -t "${SESSION}:0.0" "bash '${claudeScript}'" Enter`);
-    execSync(`tmux send-keys -t "${SESSION}:0.1" "bash '${geminiScript}'" Enter`);
-  } catch {
-    // Session gone — relaunch fresh
-    launchVisual(opts);
-  }
+    try {
+      setPaneTitle(`${SESSION}:${pane}`, `${cli.name}  ·  Phase ${phase}`);
+      tmux(`send-keys -t "${SESSION}:${pane}" "" ""`); // clear any stale input
+      tmux(`send-keys -t "${SESSION}:${pane}" "bash '${scriptPath}'" Enter`);
+    } catch {
+      // Session gone — relaunch fresh
+      launchDashboard(opts);
+    }
+  });
 }
 
-export function waitForMarkers(bridgePath: string, markers: string[], timeoutMs: number): Promise<boolean> {
+// ── Poll bridge for completion markers ──────────────────────────────────────
+export function waitForMarkers(
+  bridgePath: string,
+  markers: string[],
+  timeoutMs: number,
+  onProgress?: (found: string[], total: string[]) => void
+): Promise<boolean> {
   return new Promise((resolve) => {
     const start = Date.now();
+    const found = new Set<string>();
+
     const iv = setInterval(() => {
       try {
-        const content = fs.readFileSync(bridgePath, 'utf8');
-        if (markers.every(m => content.includes(m))) { clearInterval(iv); resolve(true); return; }
+        const content = fs.existsSync(bridgePath) ? fs.readFileSync(bridgePath, 'utf8') : '';
+        let changed = false;
+        for (const m of markers) {
+          if (!found.has(m) && content.includes(m)) {
+            found.add(m);
+            changed = true;
+          }
+        }
+        if (changed && onProgress) onProgress([...found], markers);
+        if (found.size === markers.length) { clearInterval(iv); resolve(true); return; }
       } catch {}
       if (Date.now() - start > timeoutMs) { clearInterval(iv); resolve(false); }
-    }, 1500);
+    }, 2000);
   });
 }

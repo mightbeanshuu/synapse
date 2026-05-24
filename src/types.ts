@@ -1,12 +1,17 @@
+export type CLIId = 'claude' | 'gemini' | 'codex';
+
 export interface CLIConfig {
+  id: CLIId;
   binary: string;
   name: string;
+  role: 'architect' | 'executor' | 'reviewer';
   preamble: string;
+  color: string; // ANSI hex for display
 }
 
 export interface RolesConfig {
-  cli1: CLIConfig;
-  cli2: CLIConfig;
+  cli1: Omit<CLIConfig, 'id' | 'role' | 'color'>;
+  cli2: Omit<CLIConfig, 'id' | 'role' | 'color'>;
 }
 
 export interface RunResult {
@@ -33,13 +38,12 @@ export interface Score {
 
 export interface Analysis {
   scores: Score[];
-  architect: 'claude' | 'gemini';
-  executor: 'claude' | 'gemini';
+  architect: CLIId;
+  executor: CLIId;
   reason: string;
 }
 
-export interface AssignedRoles {
-  architect: CLIConfig;
-  executor: CLIConfig;
-  reason: string;
+export interface ActiveCLIs {
+  configs: CLIConfig[];
+  hasCodex: boolean;
 }

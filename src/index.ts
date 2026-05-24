@@ -8,137 +8,150 @@ import ora from 'ora';
 import { showBanner } from './ui/banner';
 import { CONNECTION_METHODS } from './connect/methods';
 import { generateAnalysis, renderAnalysisTable } from './analyzer';
-import { assignRoles } from './assigner';
-import { runOrchestration } from './orchestrator';
+import { assignRolesFromAnalysis, getRoleReason } from './assigner';
 import { runVisualOrchestration } from './visual-orchestrator';
 import { tmuxAvailable } from './launcher';
+import type { CLIId } from './types';
 
+// ── CLI availability checks ──────────────────────────────────────────────────
+function cliAvailable(bin: string): boolean {
+  try { execSync(`which ${bin}`, { stdio: 'ignore' }); return true; }
+  catch { return false; }
+}
+
+// ── Project directory ────────────────────────────────────────────────────────
 async function resolveProjectDir(): Promise<string> {
   const { mode } = await inquirer.prompt<{ mode: string }>([{
     type: 'list',
     name: 'mode',
     message: chalk.white('Project directory:'),
     choices: [
-      { name: '✦  Create new project folder on Desktop', value: 'new' },
-      { name: '📁  Use existing directory', value: 'existing' },
+      { name: '✦  Create new folder on Desktop', value: 'new' },
+      { name: '📁  Use existing directory',       value: 'existing' },
     ],
   }]);
 
   if (mode === 'new') {
     const { name } = await inquirer.prompt<{ name: string }>([{
-      type: 'input',
-      name: 'name',
+      type: 'input', name: 'name',
       message: chalk.white('Project name:'),
-      validate: (v: string) => v.trim().length > 0 || 'Name cannot be empty',
+      validate: (v: string) => v.trim().length > 0 || 'Cannot be empty',
     }]);
-
     const slug = name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
     const dir = path.join(os.homedir(), 'Desktop', slug);
     fs.mkdirSync(dir, { recursive: true });
-
     try { execSync('git init', { cwd: dir, stdio: 'ignore' }); } catch {}
-
     console.log(chalk.dim(`\n  Created: ${dir}\n`));
     return dir;
   }
 
   const { dir } = await inquirer.prompt<{ dir: string }>([{
-    type: 'input',
-    name: 'dir',
+    type: 'input', name: 'dir',
     message: chalk.white('Directory path:'),
     default: process.cwd(),
     validate: (v: string) => fs.existsSync(v.trim()) || 'Directory does not exist',
   }]);
-
   return path.resolve(dir.trim());
 }
 
+// ── Main ─────────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   showBanner();
 
-  // ── Brief ────────────────────────────────────────────────────────────────
+  // ── Brief ─────────────────────────────────────────────────────────────────
   let brief = process.argv.slice(2).filter(a => !a.startsWith('--')).join(' ').trim();
-
   if (!brief) {
     const { b } = await inquirer.prompt<{ b: string }>([{
-      type: 'input',
-      name: 'b',
+      type: 'input', name: 'b',
       message: chalk.white('Project brief:'),
-      validate: (v: string) => v.trim().length > 0 || 'Brief cannot be empty',
+      validate: (v: string) => v.trim().length > 0 || 'Cannot be empty',
     }]);
     brief = b.trim();
   }
+  console.log();
+
+  // ── CLI selection ──────────────────────────────────────────────────────────
+  const available: Array<{ id: CLIId; label: string; installed: boolean }> = [
+    { id: 'claude', label: 'Claude Code    (Architect by default)',  installed: cliAvailable('claude') },
+    { id: 'gemini', label: 'Gemini CLI     (Executor by default)',   installed: cliAvailable('gemini') },
+    { id: 'codex',  label: 'Codex CLI      (Reviewer — needs OPENAI_API_KEY)', installed: cliAvailable('codex')  },
+  ];
+
+  const { selectedIds } = await inquirer.prompt<{ selectedIds: CLIId[] }>([{
+    type: 'checkbox',
+    name: 'selectedIds',
+    message: chalk.white('Select CLIs to use (min 2):'),
+    choices: available.map(c => ({
+      name: c.installed
+        ? `${c.label}`
+        : `${c.label}  ${chalk.red('[not installed]')}`,
+      value: c.id,
+      checked: c.installed && (c.id === 'claude' || c.id === 'gemini'),
+      disabled: !c.installed,
+    })),
+    validate: (v: CLIId[]) => v.length >= 2 || 'Select at least 2 CLIs',
+  }]);
 
   console.log();
 
-  // ── Connection method ────────────────────────────────────────────────────
+  // ── Connection method ──────────────────────────────────────────────────────
   const { methodId } = await inquirer.prompt<{ methodId: string }>([{
-    type: 'list',
-    name: 'methodId',
+    type: 'list', name: 'methodId',
     message: chalk.white('Connection method:'),
     choices: CONNECTION_METHODS.map(m => ({
-      name:
-        `${m.icon}  ${chalk.bold(m.name.padEnd(22))}` +
-        chalk.dim(m.description) +
+      name: `${m.icon}  ${chalk.bold(m.name.padEnd(22))}${chalk.dim(m.description)}` +
         (!m.implemented ? chalk.red('  [coming soon]') : ''),
       value: m.id,
       short: m.name,
     })),
   }]);
-
   const selectedMethod = CONNECTION_METHODS.find(m => m.id === methodId)!;
   const effectiveMethod = selectedMethod.implemented ? methodId : 'parallel-streams';
-  if (!selectedMethod.implemented) {
-    console.log(chalk.yellow(`\n⚠ Falling back to Parallel Streams\n`));
-  }
+  if (!selectedMethod.implemented) console.log(chalk.yellow('⚠ Falling back to Parallel Streams\n'));
 
-  // ── Project directory ─────────────────────────────────────────────────────
+  // ── Project directory ──────────────────────────────────────────────────────
   const projectDir = await resolveProjectDir();
 
-  // ── Connect ───────────────────────────────────────────────────────────────
-  const connectSpinner = ora('Connecting to Claude Code and Gemini CLI...').start();
-  await new Promise(r => setTimeout(r, 600));
-  connectSpinner.succeed(chalk.green('Both CLIs connected'));
+  // ── Connect ────────────────────────────────────────────────────────────────
+  const connectSpinner = ora('Connecting to selected CLIs...').start();
+  await new Promise(r => setTimeout(r, 500));
+  connectSpinner.succeed(chalk.green(`Connected: ${selectedIds.join(', ')}`));
 
-  // ── Analysis ──────────────────────────────────────────────────────────────
-  const analysisSpinner = ora('Claude is analysing both CLIs (~15s)...').start();
+  // ── Analysis (architect/executor from Claude vs Gemini scores) ───────────
+  const analysisSpinner = ora('Claude is analysing CLI capabilities (~15s)...').start();
   const analysis = await generateAnalysis(projectDir);
   analysisSpinner.succeed(chalk.green('Capability analysis complete'));
 
   console.log('\n' + chalk.bold('  Capability Comparison\n'));
   renderAnalysisTable(analysis);
 
-  // ── Role assignment ───────────────────────────────────────────────────────
-  const roles = assignRoles(analysis);
-  console.log(`\n${chalk.cyan('✓')} ${chalk.bold(roles.architect.name)} ${chalk.dim('→ Architecture · Logic · Edge Cases · Review')}`);
-  console.log(`${chalk.yellow('✓')} ${chalk.bold(roles.executor.name)} ${chalk.dim('→ Implementation · Boilerplate · Tests · Setup')}`);
-  console.log(chalk.dim(`\n  Rationale: ${roles.reason}\n`));
+  // ── Role assignment ────────────────────────────────────────────────────────
+  const activeCLIs = assignRolesFromAnalysis(analysis, selectedIds);
 
-  // ── Confirm ───────────────────────────────────────────────────────────────
+  console.log('\n' + chalk.bold('  Role Assignment\n'));
+  for (const cli of activeCLIs.configs) {
+    const roleIcon = cli.role === 'architect' ? '🏛' : cli.role === 'executor' ? '⚙' : '🔍';
+    console.log(`  ${roleIcon}  ${chalk.bold(cli.name.padEnd(32))}${chalk.dim(cli.role.toUpperCase())}`);
+  }
+  console.log(chalk.dim(`\n  ${getRoleReason(analysis)}\n`));
+
+  // ── Mode info ──────────────────────────────────────────────────────────────
   const hasTmux = tmuxAvailable();
-  const modeLabel = hasTmux
-    ? chalk.cyan('visual (two terminal panes, CLIs build files for real)')
-    : chalk.yellow('headless (captured output only — install tmux for visual mode)');
+  console.log(`  Mode: ${hasTmux
+    ? chalk.hex('#00efd4')('visual dashboard (split-pane terminal, CLIs build files for real)')
+    : chalk.yellow('headless — install tmux for the visual dashboard')}\n`);
 
-  console.log(`  Mode: ${modeLabel}\n`);
-
+  // ── Confirm ────────────────────────────────────────────────────────────────
   const { go } = await inquirer.prompt<{ go: boolean }>([{
-    type: 'confirm',
-    name: 'go',
+    type: 'confirm', name: 'go',
     message: chalk.white('Ready to build?'),
     default: true,
   }]);
-
   if (!go) { console.log(chalk.dim('\nAborted.\n')); process.exit(0); }
-
   console.log();
 
-  // ── Orchestrate ───────────────────────────────────────────────────────────
-  if (hasTmux) {
-    await runVisualOrchestration(brief, effectiveMethod, roles, projectDir);
-  } else {
-    await runOrchestration(brief, effectiveMethod, roles, projectDir);
-  }
+  // ── Orchestrate ────────────────────────────────────────────────────────────
+  await runVisualOrchestration(brief, effectiveMethod, activeCLIs, projectDir);
 }
 
 main().catch(e => {
