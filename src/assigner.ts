@@ -101,6 +101,12 @@ const CLI_LABELS: Record<CLIId, string> = {
   codex:  'Codex CLI',
 };
 
+const CLI_SYMBOLS: Record<CLIId, string> = {
+  claude: '☁️',
+  gemini: '💎',
+  codex:  '🌀',
+};
+
 function makeConfig(id: CLIId, role: CLIConfig['role'], preamble?: string): CLIConfig {
   const p = preamble ?? (
     role === 'architect' ? ARCHITECT_PREAMBLE :
@@ -115,6 +121,7 @@ function makeConfig(id: CLIId, role: CLIConfig['role'], preamble?: string): CLIC
     role,
     preamble: p,
     color: CLI_COLORS[id],
+    symbol: CLI_SYMBOLS[id],
   };
 }
 

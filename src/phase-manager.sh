@@ -53,9 +53,9 @@ idx_for() {
 
 run_cmd_for() {
   case "$1" in
-    gemini) echo 'gemini --yolo -p "$PROMPT" 2>&1 | tee -a "$LOGFILE"' ;;
-    codex)  echo 'codex "$PROMPT" 2>&1 | tee -a "$LOGFILE"' ;;
-    *)      echo 'claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | tee -a "$LOGFILE"' ;;
+    gemini) echo 'gemini --yolo -p "$PROMPT" 2>&1 | sed "s/^/💎 /" | tee -a "$LOGFILE"' ;;
+    codex)  echo 'codex exec --ask-for-approval never "$PROMPT" 2>&1 | sed "s/^/🌀 /" | tee -a "$LOGFILE"' ;;
+    *)      echo 'claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | sed "s/^/☁️ /" | tee -a "$LOGFILE"' ;;
   esac
 }
 
@@ -74,9 +74,9 @@ get_spin_msg() {
 
 agent_symbol() {
   case "$1" in
-    claude) echo "◉" ;;
-    gemini) echo "◆" ;;
-    codex)  echo "◎" ;;
+    claude) echo "☁️" ;;
+    gemini) echo "💎" ;;
+    codex)  echo "🌀" ;;
     *)      echo "•" ;;
   esac
 }
@@ -159,7 +159,20 @@ check_new_files() {
   cur=$(find "$PROJECT_DIR" -type f ! -path '*/.git/*' ! -name '*.log' ! -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
   if [ "$cur" -gt "$LAST_FILES" ]; then
     while IFS= read -r f; do
-      [ -n "$f" ] && event "$YELLOW" "+" "file" "${f#$PROJECT_DIR/}"
+      if [ -n "$f" ]; then
+        local rel_f="${f#$PROJECT_DIR/}"
+        local owner="?"
+        local owner_col="$DIM"
+        for id in $ALL_IDS; do
+          local log="${SESSION_DIR}/${id}_p${CUR_PHASE}.log"
+          if [ -f "$log" ] && grep -q "$rel_f" "$log"; then
+            owner=$(agent_symbol "$id")
+            owner_col=$(cli_col "$id")
+            break
+          fi
+        done
+        event "$YELLOW" "+" "file" "${owner_col}${owner}${R} ${rel_f}"
+      fi
     done < <(find "$PROJECT_DIR" -type f ! -path '*/.git/*' ! -name '*.log' ! -name '*.sh' \
         -newer /tmp/.syn_pm_$$ 2>/dev/null | head -10)
     LAST_FILES=$cur

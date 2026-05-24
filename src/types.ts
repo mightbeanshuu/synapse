@@ -7,6 +7,7 @@ export interface CLIConfig {
   role: 'architect' | 'executor' | 'reviewer';
   preamble: string;
   color: string; // ANSI hex for display
+  symbol: string;
 }
 
 export interface RolesConfig {

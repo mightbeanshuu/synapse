@@ -69,6 +69,7 @@ function writeRunScript(
   cli: CLIConfig,
   promptFile: string,
   doneMarker: string,
+  failMarker: string,
   projectDir: string,
   logFile: string,
   bridgePath: string,
@@ -76,12 +77,13 @@ function writeRunScript(
   sessionDir: string
 ): void {
   let runCmd: string;
+  const symbolPrefix = `${cli.symbol} `;
   if (cli.id === 'gemini') {
-    runCmd = `gemini --yolo -p "$PROMPT" 2>&1 | tee -a "${logFile}"`;
+    runCmd = `gemini --yolo -p "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else if (cli.id === 'codex') {
-    runCmd = `codex "$PROMPT" 2>&1 | tee -a "${logFile}"`;
+    runCmd = `codex exec --ask-for-approval never "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else {
-    runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | tee -a "${logFile}"`;
+    runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   }
 
   const guidanceBlock = phase === 2 ? `
@@ -104,9 +106,15 @@ printf '\\033[1m  ${label}\\033[0m\\n'
 printf '\\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m\\n'
 echo ''
 ${runCmd}
+RC=$?
 echo ''
-printf '\\033[32m  ✓ ${cli.name} done — signaling completion\\033[0m\\n'
-echo "${doneMarker}" >> '${bridgePath}'
+if [ "$RC" -eq 0 ]; then
+  printf '\\033[32m  ✓ ${cli.name} completed\\033[0m\\n'
+  echo "${doneMarker}" >> '${bridgePath}'
+else
+  printf '\\033[31m  ✗ ${cli.name} failed (exit %s)\\033[0m\\n' "$RC"
+  echo "${failMarker}" >> '${bridgePath}'
+fi
 `;
 
   fs.writeFileSync(scriptPath, script, { mode: 0o755 });
@@ -127,7 +135,8 @@ export function writePhaseScripts(opts: LaunchOpts, phase: number, promptFiles: 
     const scriptPath = path.join(opts.sessionDir, `${cli.id}_p${phase}.sh`);
     const logFile    = path.join(opts.sessionDir, `${cli.id}_p${phase}.log`);
     const doneMarker = `${cli.id.toUpperCase()}_P${phase}_DONE`;
-    writeRunScript(scriptPath, cli, promptFiles[i], doneMarker,
+    const failMarker = `${cli.id.toUpperCase()}_P${phase}_FAILED`;
+    writeRunScript(scriptPath, cli, promptFiles[i], doneMarker, failMarker,
       opts.projectDir, logFile, opts.bridgePath, phase, opts.sessionDir);
   });
 }
@@ -149,7 +158,8 @@ export function launchDashboard(opts: LaunchOpts): void {
     const scriptPath = path.join(sessionDir, `${cli.id}_p1.sh`);
     const logFile    = path.join(sessionDir, `${cli.id}_p1.log`);
     const doneMarker = `${cli.id.toUpperCase()}_P1_DONE`;
-    writeRunScript(scriptPath, cli, promptFiles[i], doneMarker, projectDir, logFile, bridgePath, 1, sessionDir);
+    const failMarker = `${cli.id.toUpperCase()}_P1_FAILED`;
+    writeRunScript(scriptPath, cli, promptFiles[i], doneMarker, failMarker, projectDir, logFile, bridgePath, 1, sessionDir);
     setPaneTitle(`${SESSION}:${pane}`, `${cli.name}  ·  Phase 1`);
     tmux(`send-keys -t "${SESSION}:${pane}" "bash '${scriptPath}'" Enter`);
   });
