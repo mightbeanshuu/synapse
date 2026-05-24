@@ -2,6 +2,7 @@
 # SYNAPSE  ·  Agent Stream  v2.1
 # Args: <cli_id> <symbol> <log_p1> <log_p2> <pipe_path> [safe_mode:0|1]
 CLI_ID="$1"; SYMBOL="$2"; LOG_P1="$3"; LOG_P2="$4"; PIPE="$5"; SAFE_MODE="${6:-0}"
+CLI_ID_UPPER=$(echo "$CLI_ID" | tr '[:lower:]' '[:upper:]')
 
 # ── ANSI ─────────────────────────────────────────────────────────────────────
 R=$'\033[0m'; BOLD=$'\033[1m'; DIM=$'\033[2m'
@@ -44,7 +45,7 @@ print_header() {
   printf "\n${A_CLR}${BOLD}${b}${R}\n\n"
   local safe_tag=""
   [ "$SAFE_MODE" = "1" ] && safe_tag="${YELLOW}  🛡 SAFE MODE${R}"
-  printf "  ${A_CLR}${BOLD}${SYMBOL}  SYNAPSE  ›  ${CLI_ID^^}${R}   ${DIM}${ROLE}  ·  Phase 1 active  ·  $(date '+%H:%M:%S')${R}${safe_tag}\n"
+  printf "  ${A_CLR}${BOLD}${SYMBOL}  SYNAPSE  ›  ${CLI_ID_UPPER}${R}   ${DIM}${ROLE}  ·  Phase 1 active  ·  $(date '+%H:%M:%S')${R}${safe_tag}\n"
   printf "  ${DIM}session: $(basename "$SESSION_DIR")  ·  log: $(basename "$LOG_P1")${R}\n\n"
   printf "${A_CLR}${BOLD}${b}${R}\n\n"
   printf "  ${DIM}Streaming live output — type below to steer this agent${R}\n\n"
@@ -130,7 +131,7 @@ colorize() {
 # ── Phase 2 watcher (runs in background, prints banner when P2 starts) ────────
 (
   while true; do
-    if LC_ALL=C grep -q "${CLI_ID^^}_P1_DONE" "$BRIDGE" 2>/dev/null; then
+    if LC_ALL=C grep -q "${CLI_ID_UPPER}_P1_DONE" "$BRIDGE" 2>/dev/null; then
       sleep 2
       phase2_banner
       break
@@ -191,7 +192,7 @@ STREAM_PID=$!
 
 # ── Interactive chat loop ─────────────────────────────────────────────────────
 while true; do
-  printf "\n  ${A_CLR}${BOLD}┌─ ${SYMBOL} ${CLI_ID^^}${R}  ${DIM}$(elapsed) elapsed  ·  ctrl+c exits${R}\n"
+  printf "\n  ${A_CLR}${BOLD}┌─ ${SYMBOL} ${CLI_ID_UPPER}${R}  ${DIM}$(elapsed) elapsed  ·  ctrl+c exits${R}\n"
   printf "  ${A_CLR}${BOLD}└›${R} "
 
   if IFS= read -r msg; then

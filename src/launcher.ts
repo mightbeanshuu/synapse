@@ -86,7 +86,7 @@ function writeRunScript(
     const yolo = safeMode ? '' : '--yolo';
     runCmd = `gemini ${yolo} -p "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else if (cli.id === 'codex') {
-    const approval = safeMode ? '--ask-for-approval always' : '--ask-for-approval never';
+    const approval = safeMode ? '--ask-for-approval on-request' : '--ask-for-approval never';
     runCmd = `codex ${approval} exec "$PROMPT" 2>&1 | LC_ALL=C sed "s/^/${symbolPrefix}/" | tee -a "${logFile}"`;
   } else {
     // Safe mode: no --dangerously-skip-permissions, Claude will ask in its tmux pane
