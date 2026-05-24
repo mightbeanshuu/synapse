@@ -28,7 +28,7 @@ REASON: one sentence
 
 Replace every X with a number 1-10. Be honest and balanced.`;
 
-const FALLBACK: Analysis = {
+export const FALLBACK: Analysis = {
   scores: [
     { dimension: 'Code Architecture & Design', claude: 9, gemini: 7, advantage: 'Claude' },
     { dimension: 'Core Logic & Algorithms',    claude: 9, gemini: 7, advantage: 'Claude' },

@@ -21,12 +21,22 @@ ALL_IDS="$CLI_ID_0"
 
 R=$'\033[0m'; CYAN=$'\033[36m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
 RED=$'\033[31m'; DIM=$'\033[2m'; BOLD=$'\033[1m'; BLUE=$'\033[34m'
-TEAL=$'\033[38;5;51m'; MAGENTA=$'\033[35m'
+TEAL=$'\033[38;5;51m'; MAGENTA=$'\033[35m'; ORANGE=$'\033[38;5;208m'
+
+SESSION_T0=$(date +%s)
 
 ts()      { date +%H:%M:%S; }
+elapsed() {
+  local now d; now=$(date +%s); d=$((now - SESSION_T0))
+  printf '%02d:%02d' $((d/60)) $((d%60))
+}
 divider() {
   local c; c=$(tput cols 2>/dev/null || echo 80)
   printf "${CYAN}"; printf '%0.s─' $(seq 1 "$c"); printf "${R}\n"
+}
+wbar() {
+  local c; c=$(tput cols 2>/dev/null || echo 80)
+  printf "${TEAL}${BOLD}"; printf '%0.s━' $(seq 1 "$c"); printf "${R}\n"
 }
 cli_col() {
   case "$1" in claude) echo "$CYAN";; gemini) echo "$BLUE";; codex) echo "$GREEN";; *) echo "$R";; esac
@@ -84,14 +94,19 @@ agent_symbol() {
 compact_activity() {
   local line="$1"
   case "$line" in
-    *error*|*Error*|*failed*|*Failed*) echo "error" ;;
-    *test*|*jest*|*vitest*|*tsc*|*build*) echo "validating" ;;
-    *fix*|*patch*|*refactor*) echo "fixing" ;;
-    *write*|*create*|*implement*) echo "writing" ;;
-    *plan*|*architect*|*design*) echo "designing" ;;
-    *review*|*analy*|*inspect*) echo "reviewing" ;;
-    "") echo "warming up" ;;
-    *) echo "working" ;;
+    *[Ee]rror*|*FAIL*|*[Ff]ailed*|*[Cc]annot*|*[Ee]xception*) echo "✗ error" ;;
+    *[Ww]arning*|*WARN*|*[Dd]eprecate*)  echo "⚠ warn" ;;
+    *[Tt]est*|*jest*|*vitest*|*pytest*|*spec*)  echo "⊕ test" ;;
+    *"npm install"*|*"npm run"*|*"yarn"*|*"pip"*|*"cargo"*|*"Bash("*) echo "⊞ exec" ;;
+    *[Ww]rit*file*|*[Cc]reat*file*|*"write_file"*|*"create_file"*) echo "✦ create" ;;
+    *[Ww]rit*|*[Ee]dit*|*[Ss]av*)       echo "✦ write" ;;
+    *[Rr]ead*|*[Vv]iew*|*"read_file"*)  echo "◎ read" ;;
+    *[Aa]nalyz*|*[Ii]nspect*|*[Cc]heck*|*[Aa]udit*) echo "◎ check" ;;
+    *[Ff]ix*|*[Pp]atch*|*[Rr]efactor*|*[Dd]ebug*) echo "⚒ fix" ;;
+    *[Pp]lan*|*[Dd]esign*|*[Aa]rchitect*) echo "◈ plan" ;;
+    *[Cc]omplete*|*[Ss]uccess*|*[Ff]inish*) echo "✓ done" ;;
+    ""|*"warming"*) echo "· idle" ;;
+    *) echo "· working" ;;
   esac
 }
 
@@ -121,7 +136,8 @@ start_spinner() {
       local c="${SPIN_FRAMES:$((i % 8)):1}"
       local msg; msg=$(get_spin_msg "$mi")
       local states; states=$(agent_state_line)
-      printf "\r\033[K  ${TEAL}${c}${R}  ${DIM}${msg}...${R}  ${states}"
+      local el; el=$(elapsed)
+      printf "\r\033[K  ${TEAL}${c}${R}  ${DIM}${msg}...${R}  ${states}  ${DIM}│ ${el}${R}"
       i=$((i+1))
       [ $((i % 16)) -eq 0 ] && mi=$((mi+1))
       sleep 0.35
@@ -490,10 +506,17 @@ wait_phase() {
 }
 
 clear
-divider
-printf "${CYAN}${BOLD}  ⬡  SYNAPSE  Command Center${R}  ${DIM}—  ${PROJECT_DIR}${R}\n"
-printf "${DIM}  /help for commands. You can type commands while agents run.${R}\n"
-printf "${DIM}  Guardrails: P1=${P1_TIMEOUT}s  P2=${P2_TIMEOUT}s  stall-kill=${STALL_KILL}×8s${R}\n"
+wbar
+printf "\n"
+printf "  ${TEAL}${BOLD}⬡  SYNAPSE  Command Center${R}  ${DIM}·  ${N_CLIS} agents  ·  $(date '+%H:%M:%S')${R}\n"
+printf "  ${DIM}Project : ${PROJECT_DIR}${R}\n"
+printf "  ${DIM}Agents  : ${ALL_IDS}${R}\n"
+printf "\n"
+wbar
+printf "\n"
+printf "  ${DIM}/help  /status  /summary  /ask <agent|all> <msg>  /priority <msg>${R}\n"
+printf "  ${DIM}Guardrails: P1=${P1_TIMEOUT}s  P2=${P2_TIMEOUT}s  stall-kill=${STALL_KILL}×8s${R}\n"
+printf "\n"
 divider
 printf "\n"
 
@@ -507,8 +530,19 @@ P1_RESULT=$?
 stop_spinner
 printf "\n"
 [ "$P1_RESULT" -eq 0 ] \
-  && printf "  ${GREEN}${BOLD}⬡  Phase 1 complete!${R}\n" \
-  || printf "  ${YELLOW}${BOLD}⬡  Phase 1 ended via guardrail${R}\n"
+  && printf "  ${GREEN}${BOLD}⬡  Phase 1 complete!${R}  ${DIM}$(elapsed) elapsed${R}\n" \
+  || printf "  ${YELLOW}${BOLD}⬡  Phase 1 ended via guardrail${R}  ${DIM}$(elapsed) elapsed${R}\n"
+
+# Project stats after P1
+_p1_files=$(find "$PROJECT_DIR" -type f ! -path '*/.git/*' ! -name '*.log' ! -name '*.sh' 2>/dev/null | wc -l | tr -d ' ')
+printf "  ${DIM}Files created: ${_p1_files}  ·  Project: $(basename "$PROJECT_DIR")${R}\n"
+if [ "$_p1_files" -gt 0 ]; then
+  printf "  ${DIM}──\n"
+  find "$PROJECT_DIR" -type f ! -path '*/.git/*' ! -name '*.log' ! -name '*.sh' 2>/dev/null \
+    | head -12 \
+    | while IFS= read -r f; do printf "  ${DIM}  %s${R}\n" "${f#$PROJECT_DIR/}"; done
+fi
+printf "\n"
 
 PLAN="$PROJECT_DIR/PLAN.md"
 if [ -f "$PLAN" ]; then

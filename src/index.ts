@@ -6,8 +6,8 @@ import chalk from 'chalk';
 import inquirer from 'inquirer';
 import ora from 'ora';
 import { showBanner } from './ui/banner';
-import { CONNECTION_METHODS, pickFastest } from './connect/methods';
-import { generateAnalysis, renderAnalysisTable } from './analyzer';
+import { CONNECTION_METHODS } from './connect/methods';
+import { generateAnalysis, renderAnalysisTable, FALLBACK as FALLBACK_ANALYSIS } from './analyzer';
 import { assignRolesFromAnalysis, assignRolesManually, assignRolesForTracks, getRoleReason } from './assigner';
 import { decomposeToTracks } from './task-splitter';
 import { runVisualOrchestration } from './visual-orchestrator';
@@ -149,26 +149,15 @@ async function main(): Promise<void> {
   }]);
   console.log();
 
-  // ── Connection method ──────────────────────────────────────────────────────
-  const { methodIds } = await inquirer.prompt<{ methodIds: string[] }>([{
-    type: 'checkbox', name: 'methodIds',
-    message: chalk.white('Connection methods (fastest available wins):'),
-    choices: CONNECTION_METHODS.map(m => {
-      const bar = m.speedBar ? chalk.hex('#00efd4')(m.speedBar) + '  ' + chalk.bold(m.speedLabel ?? '') : '';
-      const badge = m.badge ? chalk.hex('#ffdd00').bold(`  ${m.badge}`) : '';
-      return {
-        name: `${m.icon}  ${chalk.bold(m.name.padEnd(22))}${bar}${badge}${!m.implemented ? chalk.red('  [soon]') : ''}`,
-        value: m.id,
-        checked: m.id === 'named-pipe',
-        disabled: !m.implemented,
-      };
-    }),
-    validate: (v: string[]) => v.length >= 1 || 'Select at least one',
-  }]);
-
-  const effectiveMethod = pickFastest(methodIds);
-  const methodName = CONNECTION_METHODS.find(m => m.id === effectiveMethod)?.name ?? effectiveMethod;
-  console.log(chalk.dim(`\n  Using: ${chalk.bold(methodName)}\n`));
+  // ── Connection method — auto-select fastest ────────────────────────────────
+  const effectiveMethod = 'named-pipe';
+  const methodMeta = CONNECTION_METHODS.find(m => m.id === effectiveMethod);
+  console.log(
+    chalk.dim(`  Connection : `) +
+    chalk.bold(methodMeta?.name ?? effectiveMethod) +
+    chalk.hex('#ffdd00').bold(`  ${methodMeta?.badge ?? '⚡ FASTEST'}`) +
+    '\n'
+  );
 
   // ── Project directory ──────────────────────────────────────────────────────
   const projectDir = await resolveProjectDir();
@@ -219,23 +208,36 @@ async function main(): Promise<void> {
     }
 
   } else {
-    // Sequential: capability analysis + optional manual override
-    const analysisSpinner = ora('Analysing CLI capabilities (~15s)...').start();
-    const analysis = await generateAnalysis(projectDir);
-    analysisSpinner.succeed(chalk.green('Capability analysis complete'));
-
-    console.log('\n' + chalk.bold('  Capability Comparison\n'));
-    renderAnalysisTable(analysis);
-
-    // Ask: auto or manual role assignment?
+    // Sequential: quick assign or full capability analysis
     const { roleMode } = await inquirer.prompt<{ roleMode: string }>([{
       type: 'list', name: 'roleMode',
-      message: chalk.white('\n  Role assignment:'),
+      message: chalk.white('Role assignment:'),
       choices: [
-        { name: `Auto  ${chalk.dim(`(${analysis.architect} → Architect, ${analysis.executor} → Executor)`)}`, value: 'auto' },
-        { name: 'Manual — I pick who does what', value: 'manual' },
+        {
+          name: `${chalk.hex('#ffdd00').bold('⚡ Quick')}       ${chalk.dim('Claude → Architect · Gemini → Executor  (instant)')}`,
+          value: 'quick',
+        },
+        {
+          name: `${chalk.bold('Auto-analyse')}  ${chalk.dim('Claude scores both CLIs then assigns roles  (~15s)')}`,
+          value: 'auto',
+        },
+        {
+          name: 'Manual         I pick who does what',
+          value: 'manual',
+        },
       ],
     }]);
+
+    let analysis = FALLBACK_ANALYSIS;
+    if (roleMode === 'auto') {
+      const analysisSpinner = ora('Analysing CLI capabilities (~15s)...').start();
+      analysis = await generateAnalysis(projectDir);
+      analysisSpinner.succeed(chalk.green('Capability analysis complete'));
+      console.log('\n' + chalk.bold('  Capability Comparison\n'));
+      renderAnalysisTable(analysis);
+    } else if (roleMode === 'quick') {
+      console.log(chalk.dim(`\n  Claude → Architect  ·  Gemini → Executor\n`));
+    }
 
     if (roleMode === 'manual') {
       const { archId } = await inquirer.prompt<{ archId: CLIId }>([{

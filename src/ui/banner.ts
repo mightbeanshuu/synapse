@@ -64,7 +64,7 @@ function renderFrame(word: string, showSubtitle: boolean): void {
 
     const dot = chalk.hex('#00efd4')('◈');
     const label = chalk.white.bold(' Multi-CLI Orchestrator');
-    const dim = chalk.dim('  ·  v1.2.0  ·  Claude  ×  Gemini  ×  Codex');
+    const dim = chalk.dim('  ·  v1.4.0  ·  Claude  ×  Gemini  ×  Codex');
     process.stdout.write(`${indent}${dot}${label}${dim}\n`);
 
     const tagline = chalk.hex('#00b8ff')('  Two minds. One build. Zero waiting.');
