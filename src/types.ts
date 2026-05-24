@@ -50,3 +50,5 @@ export interface ActiveCLIs {
   configs: CLIConfig[];
   hasCodex: boolean;
 }
+
+export type ExecutionMode = 'sequential' | 'parallel-tracks';

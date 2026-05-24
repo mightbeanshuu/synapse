@@ -1,11 +1,10 @@
-import { execSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import type { CLIConfig } from './types';
-import type { SignalingChannel } from './connect/signaling';
 
 const SESSION = 'synapse';
-const MONITOR_SH = path.join(__dirname, 'monitor.sh');
+const PHASE_MANAGER_SH = path.join(__dirname, 'phase-manager.sh');
 
 export function tmuxAvailable(): boolean {
   try { execSync('which tmux', { stdio: 'ignore' }); return true; }
@@ -21,27 +20,24 @@ function tmux(cmd: string): void {
 }
 
 function applyTheme(projectName: string): void {
-  const setGlobal = (opt: string, val: string) =>
-    tmux(`set -t ${SESSION} ${opt} "${val}"`);
-
-  setGlobal('status', 'on');
-  setGlobal('status-interval', '5');
-  setGlobal('status-style', 'bg=colour234 fg=colour250');
-  setGlobal('status-left', '#[fg=colour39,bold] ⬡ SYNAPSE  #[fg=colour240,nobold]│  ');
-  setGlobal('status-right', `#[fg=colour240]│  ${projectName}  │  #[fg=colour39]%(date "+%H:%M")  `);
-  setGlobal('status-left-length', '30');
-  setGlobal('status-right-length', '50');
-
-  setGlobal('pane-border-style', 'fg=colour237');
-  setGlobal('pane-active-border-style', 'fg=colour39');
-  setGlobal('pane-border-status', 'top');
-  setGlobal('pane-border-format',
-    '#{?pane_active,#[fg=colour39 bold],#[fg=colour242]} #{pane_title}  ');
-
-  setGlobal('window-style', 'bg=colour232');
-  setGlobal('window-active-style', 'bg=colour232');
+  const set = (opt: string, val: string) => tmux(`set -t ${SESSION} ${opt} "${val}"`);
+  set('status', 'on');
+  set('status-interval', '5');
+  set('status-style', 'bg=colour234 fg=colour250');
+  set('status-left', '#[fg=colour39,bold] ⬡ SYNAPSE  #[fg=colour240,nobold]│  ');
+  set('status-right', `#[fg=colour240]│  ${projectName}  │  #[fg=colour39]%(date "+%H:%M")  `);
+  set('status-left-length', '30');
+  set('status-right-length', '50');
+  set('pane-border-style', 'fg=colour237');
+  set('pane-active-border-style', 'fg=colour39');
+  set('pane-border-status', 'top');
+  set('pane-border-format', '#{?pane_active,#[fg=colour39 bold],#[fg=colour242]} #{pane_title}  ');
+  set('window-style', 'bg=colour232');
+  set('window-active-style', 'bg=colour232');
 }
 
+// ── Run script writer ─────────────────────────────────────────────────────────
+// phase 2 scripts read guidance at runtime from session_dir/guidance_<id>.txt
 function writeRunScript(
   scriptPath: string,
   cli: CLIConfig,
@@ -49,7 +45,9 @@ function writeRunScript(
   doneMarker: string,
   projectDir: string,
   logFile: string,
-  signalCmd: string
+  bridgePath: string,
+  phase: number,
+  sessionDir: string
 ): void {
   let runCmd: string;
   if (cli.id === 'gemini') {
@@ -60,10 +58,21 @@ function writeRunScript(
     runCmd = `claude --dangerously-skip-permissions --print "$PROMPT" 2>&1 | tee -a "${logFile}"`;
   }
 
+  const guidanceBlock = phase === 2 ? `
+GUIDANCE_FILE='${sessionDir}/guidance_${cli.id}.txt'
+if [ -f "$GUIDANCE_FILE" ]; then
+  GUIDANCE=$(cat "$GUIDANCE_FILE")
+  PROMPT="$PROMPT
+
+USER GUIDANCE FOR PHASE 2:
+$GUIDANCE"
+fi` : '';
+
   const label = cli.name.padEnd(46);
   const script = `#!/bin/bash
 cd '${projectDir}'
 PROMPT=$(cat '${promptFile}')
+${guidanceBlock}
 printf '\\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m\\n'
 printf '\\033[1m  ${label}\\033[0m\\n'
 printf '\\033[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\\033[0m\\n'
@@ -71,7 +80,7 @@ echo ''
 ${runCmd}
 echo ''
 printf '\\033[32m  ✓ ${cli.name} done — signaling completion\\033[0m\\n'
-${signalCmd}
+echo "${doneMarker}" >> '${bridgePath}'
 `;
 
   fs.writeFileSync(scriptPath, script, { mode: 0o755 });
@@ -79,7 +88,6 @@ ${signalCmd}
 
 function buildLayout(cliCount: number): void {
   tmux(`split-window -v -t "${SESSION}:0.0" -p 25`);
-
   if (cliCount === 2) {
     tmux(`split-window -h -t "${SESSION}:0.0"`);
   } else {
@@ -98,66 +106,62 @@ function cliPanes(cliCount: number): string[] {
 
 const MONITOR_PANE = '0.1';
 
+// ── Public types ─────────────────────────────────────────────────────────────
 export interface LaunchOpts {
   clis: CLIConfig[];
-  promptFiles: string[];
+  promptFiles: string[];   // P1 prompt files
   bridgePath: string;
-  phase: number;
   projectDir: string;
   sessionDir: string;
-  signalingChannel: SignalingChannel;
 }
 
+// ── Write all run scripts for a phase ────────────────────────────────────────
+export function writePhaseScripts(
+  opts: LaunchOpts,
+  phase: number,
+  promptFiles: string[]
+): void {
+  opts.clis.forEach((cli, i) => {
+    const scriptPath = path.join(opts.sessionDir, `${cli.id}_p${phase}.sh`);
+    const logFile = path.join(opts.sessionDir, `${cli.id}_p${phase}.log`);
+    const doneMarker = `${cli.id.toUpperCase()}_P${phase}_DONE`;
+    writeRunScript(
+      scriptPath, cli, promptFiles[i], doneMarker,
+      opts.projectDir, logFile, opts.bridgePath, phase, opts.sessionDir
+    );
+  });
+}
+
+// ── Launch the tmux dashboard ─────────────────────────────────────────────────
+// Does NOT attach — caller must call attachToCurrentTerminal() after this.
 export function launchDashboard(opts: LaunchOpts): void {
-  const { clis, promptFiles, bridgePath, phase, projectDir, sessionDir, signalingChannel } = opts;
+  const { clis, promptFiles, bridgePath, projectDir, sessionDir } = opts;
 
   killSession();
   tmux(`new-session -d -s ${SESSION} -x 260 -y 60`);
-
-  const projectName = path.basename(projectDir);
-  applyTheme(projectName);
+  applyTheme(path.basename(projectDir));
   buildLayout(clis.length);
 
   const panes = cliPanes(clis.length);
 
+  // Write and launch P1 scripts
   clis.forEach((cli, i) => {
     const pane = panes[i];
-    const scriptPath = path.join(sessionDir, `${cli.id}_p${phase}.sh`);
-    const logFile = path.join(sessionDir, `${cli.id}_p${phase}.log`);
-    const doneMarker = `${cli.id.toUpperCase()}_P${phase}_DONE`;
-    const signalCmd = signalingChannel.signalCmdFor(doneMarker);
-
-    writeRunScript(scriptPath, cli, promptFiles[i], doneMarker, projectDir, logFile, signalCmd);
-    setPaneTitle(`${SESSION}:${pane}`, `${cli.name}  ·  Phase ${phase}`);
+    const scriptPath = path.join(sessionDir, `${cli.id}_p1.sh`);
+    const logFile = path.join(sessionDir, `${cli.id}_p1.log`);
+    const doneMarker = `${cli.id.toUpperCase()}_P1_DONE`;
+    writeRunScript(scriptPath, cli, promptFiles[i], doneMarker, projectDir, logFile, bridgePath, 1, sessionDir);
+    setPaneTitle(`${SESSION}:${pane}`, `${cli.name}  ·  Phase 1`);
     tmux(`send-keys -t "${SESSION}:${pane}" "bash '${scriptPath}'" Enter`);
   });
 
-  const cliNames = clis.map(c => c.id).join(' ');
-  setPaneTitle(`${SESSION}:${MONITOR_PANE}`, '⬡  Activity Feed  —  real-time');
-  tmux(`send-keys -t "${SESSION}:${MONITOR_PANE}" "bash '${MONITOR_SH}' '${bridgePath}' '${projectDir}' ${cliNames}" Enter`);
-
-  execSync(`osascript -e 'tell application "Terminal" to do script "tmux attach -t ${SESSION}"'`);
+  // Phase manager in bottom pane (handles phase transitions + guidance)
+  const cliIds = clis.map(c => c.id).join(' ');
+  setPaneTitle(`${SESSION}:${MONITOR_PANE}`, '⬡  SYNAPSE  Activity Feed');
+  tmux(`send-keys -t "${SESSION}:${MONITOR_PANE}" "bash '${PHASE_MANAGER_SH}' '${bridgePath}' '${sessionDir}' '${projectDir}' '${SESSION}' ${clis.length} ${cliIds}" Enter`);
 }
 
-export function relaunchPhase(opts: LaunchOpts): void {
-  const { clis, promptFiles, bridgePath, phase, projectDir, sessionDir, signalingChannel } = opts;
-  const panes = cliPanes(clis.length);
-
-  clis.forEach((cli, i) => {
-    const pane = panes[i];
-    const scriptPath = path.join(sessionDir, `${cli.id}_p${phase}.sh`);
-    const logFile = path.join(sessionDir, `${cli.id}_p${phase}.log`);
-    const doneMarker = `${cli.id.toUpperCase()}_P${phase}_DONE`;
-    const signalCmd = signalingChannel.signalCmdFor(doneMarker);
-
-    writeRunScript(scriptPath, cli, promptFiles[i], doneMarker, projectDir, logFile, signalCmd);
-
-    try {
-      setPaneTitle(`${SESSION}:${pane}`, `${cli.name}  ·  Phase ${phase}`);
-      tmux(`send-keys -t "${SESSION}:${pane}" "" ""`);
-      tmux(`send-keys -t "${SESSION}:${pane}" "bash '${scriptPath}'" Enter`);
-    } catch {
-      launchDashboard(opts);
-    }
-  });
+// ── Attach tmux to the CURRENT terminal (blocks until detach) ────────────────
+export function attachToCurrentTerminal(): void {
+  spawnSync('tmux', ['attach-session', '-t', SESSION], { stdio: 'inherit' });
 }
