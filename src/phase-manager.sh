@@ -152,9 +152,11 @@ event_final() {
 COMMAND_PIPE="${SESSION_DIR}/commands.pipe"
 rm -f "$COMMAND_PIPE"
 mkfifo "$COMMAND_PIPE"
+# Open the pipe for reading AND writing to prevent EOF from closing the FD
+exec 3<> "$COMMAND_PIPE"
 
 touch /tmp/.syn_pm_$$
-trap 'stop_spinner; rm -f /tmp/.syn_pm_$$ "$COMMAND_PIPE"' EXIT
+trap 'stop_spinner; rm -f /tmp/.syn_pm_$$ "$COMMAND_PIPE"; exec 3>&-' EXIT
 LAST_FILES=0
 CUR_PHASE=1
 
@@ -365,7 +367,7 @@ poll_command() {
   fi
 
   # 2. Read from command pipe (Interactive Streams)
-  if read -r -t 0.1 cmd < "$COMMAND_PIPE" 2>/dev/null; then
+  if read -u 3 -r -t 0.1 cmd; then
     [ -z "$cmd" ] && return
     # Log that the command came from a chat window
     event "$BLUE" "💬" "chat" "Incoming instruction from terminal..."

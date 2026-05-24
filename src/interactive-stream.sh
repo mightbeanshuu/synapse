@@ -19,13 +19,8 @@ printf "${DIM}  Logs will stream below...${R}\n\n"
 # Ensure logs exist
 touch "$LOG_P1" "$LOG_P2"
 
-# ── 1. Tail logs in the background ──────────────────────────────────────────
-(
-  tail -n 40 -F "$LOG_P1" "$LOG_P2" 2>/dev/null | while IFS= read -r line; do
-    # Only print non-empty lines to keep it clean
-    [ -n "$line" ] && printf "  %s\n" "$line"
-  done
-) &
+# ── 1. Tail logs in the background (Raw output for real-time) ───────────────
+tail -n 40 -F "$LOG_P1" "$LOG_P2" 2>/dev/null &
 TAIL_PID=$!
 
 # Cleanup on exit
