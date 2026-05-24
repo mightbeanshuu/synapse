@@ -245,6 +245,71 @@ EOS
   tmux send-keys -t "${TMUX_SESSION}:${pane}" "bash '${script}'" Enter 2>/dev/null || true
 }
 
+trigger_rescue() {
+  local failed_id="$1"
+  local helpers=""
+  for id in $ALL_IDS; do
+    [ "$id" != "$failed_id" ] && helpers="$helpers $id"
+  done
+
+  stop_spinner
+  event "$RED" "🆘" "RESCUE" "Agent ${failed_id} failed. Dispatching helpers: ${helpers}"
+  
+  local log_snippet; log_snippet=$(tail -n 25 "${SESSION_DIR}/${failed_id}_p${CUR_PHASE}.log" 2>/dev/null | sed 's/"/\\"/g')
+  
+  for helper in $helpers; do
+    local idx; idx=$(idx_for "$helper")
+    local pane; pane=$(pane_for "$idx")
+    local rescue_script="${SESSION_DIR}/_rescue_${helper}_p${CUR_PHASE}.sh"
+    local log_file="${SESSION_DIR}/${helper}_p${CUR_PHASE}.log"
+    local fixed_marker="RESCUE_FIXED_${helper}_P${CUR_PHASE}"
+    local cmd; cmd=$(run_cmd_for "$helper")
+    
+    cat > "$rescue_script" <<EOS
+#!/bin/bash
+cd '${PROJECT_DIR}'
+PROMPT="══════════════════════════════════════════════════════
+RESCUE MISSION — YOUR PARTNER ${failed_id} FAILED
+══════════════════════════════════════════════════════
+
+YOUR PARTNER ENCOUNTERED THIS ERROR:
+${log_snippet}
+
+YOUR TASK:
+1. DROP YOUR CURRENT TASK.
+2. Investigate the codebase and fix the error above.
+3. Verify the fix (run tests, build, etc.).
+4. When 100% fixed, finish your response.
+
+DO NOT continue your previous work until this is resolved."
+
+LOGFILE='${log_file}'
+${cmd}
+echo "${fixed_marker}" >> '${BRIDGE}'
+EOS
+    chmod +x "$rescue_script"
+    
+    tmux send-keys -t "${TMUX_SESSION}:${pane}" C-c 2>/dev/null || true
+    tmux send-keys -t "${TMUX_SESSION}:${pane}" "bash '${rescue_script}'" Enter 2>/dev/null || true
+  done
+
+  start_spinner
+  
+  # Wait for any helper to signal FIXED
+  while true; do
+    for h in $helpers; do
+      local fm="RESCUE_FIXED_${h}_P${CUR_PHASE}"
+      if grep -q "$fm" "$BRIDGE" 2>/dev/null; then
+        event "$GREEN" "✅" "FIXED" "Agent ${h} fixed the issue! Resuming phase..."
+        # Clear failure marker to prevent re-trigger
+        sed -i '' "/$(echo "$failed_id" | tr '[:lower:]' '[:upper:]')_P${CUR_PHASE}_FAILED/d" "$BRIDGE" 2>/dev/null
+        return 0
+      fi
+    done
+    sleep 2
+  done
+}
+
 handle_command() {
   local line="$1"
   case "$line" in
@@ -320,6 +385,26 @@ wait_phase() {
     local all_done=1
     for id in $ids; do
       local upper; upper=$(echo "$id" | tr '[:lower:]' '[:upper:]')
+      
+      # ── ERROR DETECTION & RESCUE ──────────────────────────────────────────
+      local fail_marker="${upper}_P${phase}_FAILED"
+      if grep -q "$fail_marker" "$BRIDGE" 2>/dev/null; then
+        trigger_rescue "$id"
+        
+        # After rescue, RESTART original phase scripts for everyone
+        event "$CYAN" "▶" "synapse" "Restarting Phase ${phase} for all agents..."
+        for rid in $ids; do
+          local r_idx; r_idx=$(idx_for "$rid")
+          local r_pane; r_pane=$(pane_for "$r_idx")
+          local r_script="${SESSION_DIR}/${rid}_p${phase}.sh"
+          tmux send-keys -t "${TMUX_SESSION}:${r_pane}" C-c 2>/dev/null || true
+          tmux send-keys -t "${TMUX_SESSION}:${r_pane}" "bash '${r_script}'" Enter 2>/dev/null || true
+        done
+        start_spinner
+        # Reset stall and keep waiting in the same phase
+        stall=0; start=$(date +%s); continue 2
+      fi
+
       local marker="${upper}_P${phase}_DONE"
       if ! grep -q "$marker" "$BRIDGE" 2>/dev/null; then
         all_done=0
