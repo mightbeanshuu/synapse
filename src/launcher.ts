@@ -181,12 +181,15 @@ export function launchDashboard(opts: LaunchOpts): void {
   // Open command center in dedicated Terminal.app window
   openTerminalWindow(`bash '${feedScript}'`);
 
-  // Open one live terminal window per selected CLI with rolling logs.
+  // Open one live terminal window per selected CLI with rolling logs and interactive chat.
+  const interactiveStreamSh = path.join(__dirname, 'interactive-stream.sh');
+  const pipePath = path.join(sessionDir, 'commands.pipe');
+  
   clis.forEach((cli) => {
     const p1 = path.join(sessionDir, `${cli.id}_p1.log`);
     const p2 = path.join(sessionDir, `${cli.id}_p2.log`);
-    const watch = `printf '\\n== ${cli.name} live stream ==\\n'; touch '${p1}' '${p2}'; tail -n 40 -F '${p1}' '${p2}'`;
-    openTerminalWindow(watch);
+    const cmd = `bash '${interactiveStreamSh}' '${cli.id}' '${cli.symbol}' '${p1}' '${p2}' '${pipePath}'`;
+    openTerminalWindow(cmd);
   });
 }
 

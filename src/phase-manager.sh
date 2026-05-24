@@ -149,8 +149,12 @@ event_final() {
   printf "  ${DIM}$(ts)${R}  ${1}${2}${R}  ${BOLD}${3}${R}  ${4}\n"
 }
 
+COMMAND_PIPE="${SESSION_DIR}/commands.pipe"
+rm -f "$COMMAND_PIPE"
+mkfifo "$COMMAND_PIPE"
+
 touch /tmp/.syn_pm_$$
-trap 'stop_spinner; rm -f /tmp/.syn_pm_$$' EXIT
+trap 'stop_spinner; rm -f /tmp/.syn_pm_$$ "$COMMAND_PIPE"' EXIT
 LAST_FILES=0
 CUR_PHASE=1
 
@@ -354,8 +358,17 @@ handle_command() {
 
 poll_command() {
   local cmd
+  # 1. Read from main terminal (Command Center)
   if IFS= read -r -t 1 cmd < /dev/tty; then
     [ -z "$cmd" ] && return
+    handle_command "$cmd"
+  fi
+
+  # 2. Read from command pipe (Interactive Streams)
+  if read -r -t 0.1 cmd < "$COMMAND_PIPE" 2>/dev/null; then
+    [ -z "$cmd" ] && return
+    # Log that the command came from a chat window
+    event "$BLUE" "💬" "chat" "Incoming instruction from terminal..."
     handle_command "$cmd"
   fi
 }
