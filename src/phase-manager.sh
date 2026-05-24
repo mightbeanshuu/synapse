@@ -32,6 +32,11 @@ cli_col() {
   case "$1" in claude) echo "$CYAN";; gemini) echo "$BLUE";; codex) echo "$GREEN";; *) echo "$R";; esac
 }
 
+title_case() {
+  local s="$1"
+  printf '%s' "$s" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}'
+}
+
 pane_for() {
   local i="$1"
   case "$i" in 0) echo "0.0";; 1) echo "0.1";; 2) echo "0.2";; esac
@@ -186,7 +191,8 @@ print_summary() {
   for id in $ALL_IDS; do
     local log="${SESSION_DIR}/${id}_p${CUR_PHASE}.log"
     local col; col=$(cli_col "$id")
-    printf "\n  ${col}${BOLD}${id^}${R}\n"
+    local name; name=$(title_case "$id")
+    printf "\n  ${col}${BOLD}${name}${R}\n"
     if [ -f "$log" ]; then
       tail -n 4 "$log" | sed 's/^/    /'
     else
@@ -310,7 +316,8 @@ wait_phase() {
         if [ "$_s" -eq 0 ]; then
           eval "$key=1"
           local col; col=$(cli_col "$id")
-          event_final "$col" "✓" "${id^}" "Phase ${phase} complete  (${elapsed}s)"
+          local name; name=$(title_case "$id")
+          event_final "$col" "✓" "${name}" "Phase ${phase} complete  (${elapsed}s)"
           start_spinner
         fi
       fi
@@ -401,7 +408,8 @@ divider
 printf "\n"
 for id in $ALL_IDS; do
   col=$(cli_col "$id")
-  printf "  ${col}${BOLD}${id^}${R} guidance: "
+  name=$(title_case "$id")
+  printf "  ${col}${BOLD}${name}${R} guidance: "
   IFS= read -r guidance
   if [ -n "$guidance" ]; then
     printf '%s\n' "$guidance" > "${SESSION_DIR}/guidance_${id}.txt"
@@ -421,13 +429,14 @@ for id in $ALL_IDS; do
   pane=$(pane_for "$_pi")
   script="${SESSION_DIR}/${id}_p2.sh"
   col=$(cli_col "$id")
+  name=$(title_case "$id")
   if [ -f "$script" ]; then
-    tmux select-pane -t "${TMUX_SESSION}:${pane}" -T "${id^}  ·  Phase 2" 2>/dev/null || true
+    tmux select-pane -t "${TMUX_SESSION}:${pane}" -T "${name}  ·  Phase 2" 2>/dev/null || true
     tmux send-keys -t "${TMUX_SESSION}:${pane}" "" "" 2>/dev/null || true
     tmux send-keys -t "${TMUX_SESSION}:${pane}" "bash '${script}'" Enter 2>/dev/null || true
-    printf "  ${DIM}$(ts)${R}  ${col}▶${R}  ${BOLD}${id^}${R}  Phase 2 started\n"
+    printf "  ${DIM}$(ts)${R}  ${col}▶${R}  ${BOLD}${name}${R}  Phase 2 started\n"
   else
-    printf "  ${DIM}$(ts)${R}  ${RED}⚠${R}  ${BOLD}${id^}${R}  Phase 2 script not found\n"
+    printf "  ${DIM}$(ts)${R}  ${RED}⚠${R}  ${BOLD}${name}${R}  Phase 2 script not found\n"
   fi
   _pi=$((_pi+1))
 done
