@@ -204,7 +204,7 @@ export function launchDashboard(opts: LaunchOpts): void {
   );
 
   // Write a feed launcher script (command center + summary)
-  const cliIds     = clis.map(c => c.id).join(' ');
+  const cliIdStr   = cliIds.join(' ');
   const feedScript = path.join(sessionDir, '_feed.sh');
   fs.writeFileSync(feedScript, [
     '#!/bin/bash',
@@ -212,7 +212,7 @@ export function launchDashboard(opts: LaunchOpts): void {
     `  '${bridgePath}' \\`,
     `  '${sessionDir}' \\`,
     `  '${projectDir}' \\`,
-    `  '${SESSION}' ${clis.length} ${cliIds}`,
+    `  '${SESSION}' ${clis.length} ${cliIdStr}`,
   ].join('\n'), { mode: 0o755 });
 
   // Only open the command center — live streams open on-demand via /c /g /x
