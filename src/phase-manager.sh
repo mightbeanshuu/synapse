@@ -22,6 +22,8 @@ ALL_IDS="$CLI_ID_0"
 # ── Read session metadata ──────────────────────────────────────────────────────
 SAFE_MODE=0
 [ -f "${SESSION_DIR}/.safe_mode" ] && SAFE_MODE=$(cat "${SESSION_DIR}/.safe_mode" 2>/dev/null)
+REVIEW_MODE=0
+[ -f "${SESSION_DIR}/.review_mode" ] && REVIEW_MODE=$(cat "${SESSION_DIR}/.review_mode" 2>/dev/null)
 STREAM_SH=""
 [ -f "${SESSION_DIR}/.stream_sh" ] && STREAM_SH=$(cat "${SESSION_DIR}/.stream_sh" 2>/dev/null)
 
@@ -382,6 +384,120 @@ EOS
   done
 }
 
+# ── Rate-limiter: exponential backoff + retry on quota exhaustion ──────────────
+# Returns 0 if it scheduled a retry, 1 if the agent is out of retries (give up).
+quota_backoff() {
+  local id="$1" phase="$2"
+  local upper; upper=$(echo "$id" | tr '[:lower:]' '[:upper:]')
+  local af="${SESSION_DIR}/.quota_attempts_${id}_p${phase}"
+  local attempts=0
+  [ -f "$af" ] && attempts=$(cat "$af" 2>/dev/null)
+  [ -z "$attempts" ] && attempts=0
+  [ "$attempts" -ge 3 ] && return 1   # exhausted retries → caller gives up
+
+  local delay=30
+  [ "$attempts" -eq 1 ] && delay=90
+  [ "$attempts" -eq 2 ] && delay=270
+  attempts=$((attempts + 1))
+  echo "$attempts" > "$af"
+
+  # Clear the failure marker so the retry isn't re-triggered instantly.
+  sed -i '' "/${upper}_P${phase}_FAILED/d" "$BRIDGE" 2>/dev/null
+
+  stop_spinner
+  event_final "$ORANGE" "⏳" "${id}" "Quota hit — backoff ${delay}s then retry ${attempts}/3"
+  local rem=$delay
+  while [ "$rem" -gt 0 ]; do
+    printf "\r\033[K  ${DIM}$(ts)${R}  ${ORANGE}⏳${R}  ${BOLD}${id}${R}  retry ${attempts}/3 in ${rem}s…"
+    sleep 1; rem=$((rem - 1))
+  done
+  printf "\r\033[K"
+
+  # Re-run the agent's phase script in its pane.
+  local r_idx; r_idx=$(idx_for "$id")
+  local r_pane; r_pane=$(pane_for "$r_idx")
+  tmux send-keys -t "${TMUX_SESSION}:${r_pane}" C-c 2>/dev/null || true
+  tmux send-keys -t "${TMUX_SESSION}:${r_pane}" "bash '${SESSION_DIR}/${id}_p${phase}.sh'" Enter 2>/dev/null || true
+  event_final "$CYAN" "▶" "${id}" "Retrying after backoff (attempt ${attempts}/3)"
+  start_spinner
+  return 0
+}
+
+# ── Phase 3: optional structured audit → REVIEW.md ────────────────────────────
+run_phase3_review() {
+  local reviewer="$CLI_ID_0"
+  for id in $ALL_IDS; do [ "$id" = "claude" ] && reviewer="claude"; done
+
+  printf "\n"; divider
+  printf "${CYAN}${BOLD}  Phase 3 — Structured Audit${R}  ${DIM}(reviewer: ${reviewer})${R}\n"
+  divider; printf "\n"
+
+  CUR_PHASE=3
+  local idx; idx=$(idx_for "$reviewer")
+  local pane; pane=$(pane_for "$idx")
+  local script="${SESSION_DIR}/_review_p3.sh"
+  local log_file="${SESSION_DIR}/${reviewer}_p3.log"
+  local cmd; cmd=$(run_cmd_for "$reviewer")
+
+  cat > "$script" <<EOS
+#!/bin/bash
+cd '${PROJECT_DIR}'
+PROMPT="You are performing a STRUCTURED CODE AUDIT of the project in ${PROJECT_DIR}.
+Read EVERY file. Run the build/type-check and the test suite to see what actually works.
+Then write REVIEW.md in the project root with findings grouped and graded:
+
+## Critical
+(broken build, security holes, data loss, will not run)
+
+## Warning
+(bugs, missing tests, fragile or unclear code)
+
+## Info
+(style, docs, nice-to-haves)
+
+For each finding give file:line, what is wrong, and the concrete fix.
+Then FIX the Critical findings yourself by editing real files. Leave Warning/Info documented.
+Create REAL files on disk. When finished, stop."
+LOGFILE='${log_file}'
+${cmd}
+echo "REVIEW_P3_DONE" >> '${BRIDGE}'
+EOS
+  chmod +x "$script"
+
+  tmux select-pane -t "${TMUX_SESSION}:${pane}" -T "${reviewer}  ·  Phase 3 Review" 2>/dev/null || true
+  tmux send-keys -t "${TMUX_SESSION}:${pane}" C-c 2>/dev/null || true
+  tmux send-keys -t "${TMUX_SESSION}:${pane}" "bash '${script}'" Enter 2>/dev/null || true
+
+  event_final "$CYAN" "▶" "review" "Auditing the codebase — writing REVIEW.md"
+  start_spinner
+  local rstart; rstart=$(date +%s)
+  while true; do
+    grep -q "REVIEW_P3_DONE" "$BRIDGE" 2>/dev/null && break
+    local now; now=$(date +%s)
+    [ $((now - rstart)) -ge 600 ] && break   # 10 min cap
+    sleep 2
+  done
+  stop_spinner
+
+  if [ -f "$PROJECT_DIR/REVIEW.md" ]; then
+    printf "\n"; divider
+    printf "${CYAN}${BOLD}  REVIEW.md${R}\n"
+    divider
+    while IFS= read -r line; do
+      case "$line" in
+        '## Critical'*) printf "  ${RED}${BOLD}%s${R}\n" "$line" ;;
+        '## Warning'*)  printf "  ${YELLOW}${BOLD}%s${R}\n" "$line" ;;
+        '## Info'*)     printf "  ${DIM}${BOLD}%s${R}\n" "$line" ;;
+        '#'*)           printf "  ${BOLD}%s${R}\n" "$line" ;;
+        *)              printf "  %s\n" "$line" ;;
+      esac
+    done < "$PROJECT_DIR/REVIEW.md"
+    printf "\n"
+  else
+    printf "  ${YELLOW}Phase 3 finished but no REVIEW.md was produced.${R}\n\n"
+  fi
+}
+
 handle_command() {
   local line="$1"
   case "$line" in
@@ -513,14 +629,17 @@ wait_phase() {
         if LC_ALL=C grep -qi "QUOTA_EXHAUSTED\|quota.*exhausted\|rate.limit\|code: 429\|exhausted your capacity" "$fail_log" 2>/dev/null; then
           local quota_reset; quota_reset=$(LC_ALL=C grep -i "reset" "$fail_log" 2>/dev/null | tail -n 1 | LC_ALL=C grep -o 'reset.*' | cut -c1-60)
           event_final "$RED" "✗" "${name}" "QUOTA EXHAUSTED${quota_reset:+ — $quota_reset}"
-          # Broadcast to all partner agents via MCP messages file
+          # Try exponential backoff + retry (30s/90s/270s) before giving up.
+          if quota_backoff "$id" "$phase"; then
+            stall=0; start=$(date +%s); continue 2
+          fi
+          # Out of retries — let the team finish without this agent.
           local mcp_dir="${SESSION_DIR}/mcp"
           mkdir -p "$mcp_dir" 2>/dev/null
-          printf '{"from":"synapse","to":"all","content":"%s quota exhausted — it cannot continue. Take over its tasks if possible.","timestamp":"%s"}\n' \
+          printf '{"from":"synapse","to":"all","content":"%s quota exhausted after 3 retries — it cannot continue. Take over its tasks if possible.","timestamp":"%s"}\n' \
             "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${mcp_dir}/mcp_messages.jsonl" 2>/dev/null
           # Inject done marker so phase can still complete without this agent
           echo "${upper}_P${phase}_DONE" >> "$BRIDGE"
-          # Skip rescue for quota errors — helpers can't fix it
           stall=0; continue 2
         fi
 
@@ -720,6 +839,12 @@ start_spinner
 wait_phase 2 "$P2_TIMEOUT" $ALL_IDS
 
 stop_spinner
+
+# ── Optional Phase 3: structured audit → REVIEW.md ────────────────────────────
+if [ "$REVIEW_MODE" = "1" ]; then
+  run_phase3_review
+fi
+
 printf "\n"
 divider
 printf "${GREEN}${BOLD}  ✓  SESSION COMPLETE${R}  ${DIM}$(elapsed) total${R}\n"

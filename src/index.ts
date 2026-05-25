@@ -12,6 +12,11 @@ import { decomposeToTracks } from './task-splitter';
 import { runVisualOrchestration } from './visual-orchestrator';
 import { tmuxAvailable } from './launcher';
 import { pickComplexity, runComplexityQA, buildConstraintBlock } from './complexity';
+import { detectDomain, domainSkills } from './domain-roles';
+import { renderSkills } from './skills';
+import { renderSoul } from './souls';
+import { loadContext } from './memory';
+import { validateIdea } from './validator';
 import type { CLIId } from './types';
 
 // ── Session cleanup ───────────────────────────────────────────────────────────
@@ -118,6 +123,9 @@ async function main(): Promise<void> {
   cleanOldSessions();
   await showBanner();
 
+  // ── Flags (override interactive toggles) ────────────────────────────────────
+  const flags = new Set(process.argv.slice(2).filter(a => a.startsWith('--')));
+
   // ── Brief ─────────────────────────────────────────────────────────────────
   let brief = process.argv.slice(2).filter(a => !a.startsWith('--')).join(' ').trim();
   if (!brief) {
@@ -144,6 +152,41 @@ async function main(): Promise<void> {
   const qaExtras = await runComplexityQA(complexityProfile);
   if (qaExtras) brief += qaExtras;
   console.log();
+
+  // ── Domain detection ────────────────────────────────────────────────────────
+  const domain = detectDomain(brief);
+  if (domain.id !== 'generic') {
+    kv('Domain', domain.label, teal('◇ specialized roles'));
+    console.log();
+  }
+
+  // ── Pre-build idea validator ────────────────────────────────────────────────
+  if (!flags.has('--no-validate')) {
+    const vSpin = ora({ text: dim('Reality-checking the idea (GitHub · npm)...'), spinner: 'dots' }).start();
+    const v = await validateIdea(brief);
+    if (!v.ok) {
+      vSpin.stop();
+    } else {
+      vSpin.succeed(chalk.green(`Reality signal: ${v.score}/100  ${dim(`(${v.verdict})`)}`));
+      if (v.topRepos.length) {
+        console.log(dim(`${T}Similar work already out there:`));
+        for (const r of v.topRepos) {
+          console.log(`${T}  ${teal('★ ' + r.stars.toLocaleString().padStart(7))}  ${chalk.bold(r.name)}`);
+        }
+      }
+      if (v.npmPackages.length) console.log(dim(`${T}npm: ${v.npmPackages.join(', ')}`));
+      console.log(dim(`${T}${v.suggestion}\n`));
+      if (v.verdict === 'crowded') {
+        const { proceed } = await inquirer.prompt<{ proceed: boolean }>([{
+          type: 'confirm', name: 'proceed',
+          message: `${T}This space is saturated — build anyway?`,
+          default: true,
+        }]);
+        if (!proceed) { console.log(dim('\nAborted — refine the idea and try again.\n')); process.exit(0); }
+      }
+    }
+    console.log();
+  }
 
   // ── CLI selection ──────────────────────────────────────────────────────────
   const available = [
@@ -180,6 +223,26 @@ async function main(): Promise<void> {
       },
     ],
   }]);
+  console.log();
+
+  // ── Advanced options (TDD / auto-review) ─────────────────────────────────────
+  let tddMode = flags.has('--tdd');
+  let reviewMode = flags.has('--review');
+  if (!flags.has('--no-advanced')) {
+    const { adv } = await inquirer.prompt<{ adv: string[] }>([{
+      type: 'checkbox', name: 'adv',
+      message: 'Advanced options:' + dim('  (space to toggle)'),
+      choices: [
+        { name: `TDD mode      ${dim('CLIs write tests first, then implementation')}`, value: 'tdd', checked: tddMode },
+        { name: `Auto-review   ${dim('Phase 3: structured audit → REVIEW.md')}`, value: 'review', checked: reviewMode },
+      ],
+    }]);
+    tddMode = adv.includes('tdd');
+    reviewMode = adv.includes('review');
+  }
+  if (tddMode || reviewMode) {
+    console.log(dim(`${T}Enabled: ${[tddMode && 'TDD', reviewMode && 'Auto-review'].filter(Boolean).join(', ')}`));
+  }
   console.log();
 
   // ── Connection: always MCP ─────────────────────────────────────────────────
@@ -314,10 +377,29 @@ async function main(): Promise<void> {
     console.log();
   }
 
-  // ── Inject complexity constraints ──────────────────────────────────────────
+  // ── Inject soul · domain · constraints · memory · skills into each preamble ──
   const constraintBlock = buildConstraintBlock(complexityProfile);
+  const memoryBlock = loadContext(projectDir);              // null on a fresh project
+  const skillNames = domainSkills(domain, { tdd: tddMode }); // domain skills (+ tdd if on)
+  const skillsBlock = renderSkills(skillNames, projectDir);
+  if (memoryBlock) console.log(dim(`${T}Loaded prior project context from .synapse/CONTEXT.md`));
+  if (skillNames.length) console.log(dim(`${T}Skills injected: ${skillNames.join(', ')}\n`));
+
   for (const cli of activeCLIs.configs) {
-    cli.preamble = constraintBlock + '\n' + cli.preamble;
+    const roleTitle = domain.roleTitles[cli.role];
+    const domainNote = domain.id === 'generic'
+      ? ''
+      : `PROJECT DOMAIN: ${domain.label} — you are acting as the ${roleTitle}.`;
+    cli.preamble = [
+      renderSoul(cli.id),
+      domainNote,
+      constraintBlock,
+      memoryBlock ?? '',
+      skillsBlock,
+      cli.preamble,
+    ].filter(Boolean).join('\n\n');
+    // Relabel display name with the domain-specific role title.
+    cli.name = cli.name.replace(/\([^)]*\)\s*$/, `(${roleTitle})`);
   }
 
   // ── Mode info ──────────────────────────────────────────────────────────────
@@ -344,7 +426,10 @@ async function main(): Promise<void> {
   if (!go) { console.log(dim('\nAborted.\n')); process.exit(0); }
   console.log();
 
-  await runVisualOrchestration(brief, effectiveMethod, activeCLIs, projectDir, safeMode);
+  await runVisualOrchestration(brief, effectiveMethod, activeCLIs, projectDir, safeMode, {
+    reviewMode,
+    techStack: complexityProfile.techStack,
+  });
 }
 
 main().catch(e => {

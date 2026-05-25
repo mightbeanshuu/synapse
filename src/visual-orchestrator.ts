@@ -3,6 +3,8 @@ import path from 'path';
 import chalk from 'chalk';
 import { Bridge } from './bridge';
 import { launchDashboard, writePhaseScripts, attachToCurrentTerminal, cleanupSession } from './launcher';
+import { scanSecurity } from './security-scan';
+import { saveContext, listProjectFiles } from './memory';
 import type { CLIConfig, ActiveCLIs } from './types';
 
 // ── Prompt builders ───────────────────────────────────────────────────────────
@@ -61,12 +63,18 @@ Start reviewing and improving now.`;
 
 // ── Main visual orchestration ────────────────────────────────────────────────
 
+export interface OrchestrationOpts {
+  reviewMode?: boolean;
+  techStack?: string;
+}
+
 export async function runVisualOrchestration(
   brief: string,
   connectionMethod: string,
   activeCLIs: ActiveCLIs,
   projectDir: string,
-  safeMode = false
+  safeMode = false,
+  extra: OrchestrationOpts = {}
 ): Promise<void> {
   const { configs: clis } = activeCLIs;
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -95,7 +103,7 @@ export async function runVisualOrchestration(
     return f;
   });
 
-  const opts = { clis, promptFiles: p1Files, bridgePath: bridge.path, projectDir, sessionDir, sessionId: timestamp, safeMode };
+  const opts = { clis, promptFiles: p1Files, bridgePath: bridge.path, projectDir, sessionDir, sessionId: timestamp, safeMode, reviewMode: extra.reviewMode };
 
   // Pre-write P2 run scripts (phase-manager.sh will execute them after guidance)
   writePhaseScripts(opts, 2, p2Files);
@@ -124,6 +132,31 @@ export async function runVisualOrchestration(
     '', '---', '',
     `## Bridge Log`, bridge.read(),
   ].join('\n'));
+
+  // ── Post-build security scan ────────────────────────────────────────────────
+  const findings = scanSecurity(projectDir);
+  if (findings.length > 0) {
+    const crit = findings.filter(f => f.severity === 'critical');
+    const warn = findings.filter(f => f.severity === 'warning');
+    console.log(chalk.bold.hex('#ffae00')('\n  ⚠  Security scan'));
+    console.log(chalk.dim(`     ${crit.length} critical · ${warn.length} warning · ${findings.length - crit.length - warn.length} info`));
+    for (const f of findings.slice(0, 8)) {
+      const c = f.severity === 'critical' ? chalk.red : f.severity === 'warning' ? chalk.yellow : chalk.dim;
+      console.log(c(`     ${f.severity.toUpperCase().padEnd(8)} ${f.rule}  —  ${f.file}:${f.line}`));
+    }
+    if (findings.length > 8) console.log(chalk.dim(`     …and ${findings.length - 8} more`));
+  } else {
+    console.log(chalk.green('\n  ✓  Security scan: no obvious issues'));
+  }
+
+  // ── Persist session memory for the next run in this directory ────────────────
+  saveContext(projectDir, {
+    brief,
+    techStack: extra.techStack ?? 'unspecified',
+    clis: clis.map(c => `${c.name} (${c.role})`).join(', '),
+    files: listProjectFiles(projectDir),
+  });
+  console.log(chalk.dim('  ✓  Saved project context → .synapse/CONTEXT.md'));
 
   console.log(chalk.bold.hex('#00efd4')('\n╔══════════════════════════════════════════╗'));
   console.log(chalk.bold.hex('#00efd4')('║          Session Complete                 ║'));

@@ -12,7 +12,41 @@
 ███████║   ██║   ██║ ╚████║██║  ██║██║     ███████║███████╗
 ╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝
   Two AI CLIs. One project. Roles assigned. Built in parallel.
-  v1.1.0 · Claude Code + Gemini CLI
+  v2.0.0 · Claude Code + Gemini CLI + Codex CLI
+```
+
+---
+
+## What's new in 2.0
+
+Synapse 2.0 turns the orchestrator from "two CLIs in parallel" into a coordinated team.
+
+- **Real-time MCP collaboration** — every CLI shares a message bus and a key/value
+  context store over MCP, with atomic cross-process writes (no more clobbered state),
+  an unread-message cursor, `wait_for_context` to block on a partner's API contract,
+  and `list_agents` presence. Agents publish interfaces early and wire against them
+  instead of guessing.
+- **Bash-permission delegation** — when one CLI is blocked from a shell command
+  (sandbox, safe mode, permission denied), it calls `request_bash` and a partner runs
+  it and hands back the output. No CLI gets stuck because it lacks a permission another has.
+- **Skills system** (`src/skills/*.md`) — composable skill files injected into preambles
+  by project type. User-extensible via `<project>/.synapse/skills/*.md`.
+- **Domain-aware roles** — the brief is classified (web-app, api, data, ml, …) and roles
+  are specialized (e.g. *API Designer · Implementation Lead · Security Reviewer*) with the
+  matching skills auto-loaded.
+- **Pre-build idea validator** — a reality check against GitHub + npm before building,
+  with a `reality_signal` score and the closest existing projects.
+- **TDD mode** and an optional **Phase 3 auto-review** that audits the whole codebase
+  into a graded `REVIEW.md`.
+- **Rate-limiter** — quota/429 errors trigger exponential backoff + retry (30s/90s/270s)
+  instead of dropping the agent.
+- **Session memory** — each run writes `.synapse/CONTEXT.md`; the next run in the same
+  directory starts already knowing what was built.
+- **Post-build security scan** — flags hardcoded secrets, SQL-injection patterns, open
+  CORS, and dangerous eval/exec before the session closes.
+
+```bash
+npm start "Build a REST API for tasks" --tdd --review   # flags also set interactively
 ```
 
 ---

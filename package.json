@@ -1,7 +1,7 @@
 {
   "name": "synapse",
-  "version": "1.8.0",
-  "description": "Two AI CLIs. One project. Roles assigned. Built in parallel.",
+  "version": "2.0.0",
+  "description": "AI CLIs as a coordinated team — roles assigned, skills injected, building one project in parallel over a shared MCP bus.",
   "bin": {
     "synapse": "./bin/synapse.js"
   },

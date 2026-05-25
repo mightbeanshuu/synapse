@@ -139,6 +139,7 @@ export interface LaunchOpts {
   sessionId: string;
   safeMode?: boolean;
   useMCP?: boolean;
+  reviewMode?: boolean;
 }
 
 // ── Write all run scripts for a phase ────────────────────────────────────────
@@ -194,6 +195,7 @@ export function launchDashboard(opts: LaunchOpts): void {
   const safeModeFlag = opts.safeMode ? '1' : '0';
 
   fs.writeFileSync(path.join(sessionDir, '.safe_mode'), safeModeFlag);
+  fs.writeFileSync(path.join(sessionDir, '.review_mode'), opts.reviewMode ? '1' : '0');
   fs.writeFileSync(
     path.join(sessionDir, '.cli_meta'),
     clis.map(c => `${c.id}:${c.symbol}`).join('\n')
