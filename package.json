@@ -1,6 +1,6 @@
 {
   "name": "synapse",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Two AI CLIs. One project. Roles assigned. Built in parallel.",
   "bin": {
     "synapse": "./bin/synapse.js"
